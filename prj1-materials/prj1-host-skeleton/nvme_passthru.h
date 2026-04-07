@@ -26,9 +26,9 @@ namespace Embedded {
                 __u32 cdw10,
                 __u32 cdw11,
                 __u32 cdw12,
-                __u64 addr,
-                __u32 length,
-                __u32 result
+                void *buf, // or use __u64 
+                __u32 length
+                //__u32 *result
             );
     };
 }
