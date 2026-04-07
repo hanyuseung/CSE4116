@@ -4,6 +4,8 @@
 #include <vector>
 #include <cstdint>
 
+#include <linux/types.h>
+
 namespace Embedded {
     enum nvme_opcode {
         NVME_CMD_WRITE                  = 0x01,

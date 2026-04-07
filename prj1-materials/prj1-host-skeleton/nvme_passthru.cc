@@ -12,12 +12,16 @@
 #include <cstdio>
 #include <inttypes.h>
 
+
+
+
 using namespace std;
 
 const unsigned int PAGE_SIZE = 4096;
 const unsigned int MAX_BUFLEN = 16*1024*1024; /* Maximum transfer size (can be adjusted if needed) */
 const unsigned int NSID = 1; /* NSID can be checked using 'sudo nvme list' */
 
+const unsigned int MAX_TRANSFER = 1*1024* 1024; // 1MB.
 const unsigned int SECTOR_SIZE = 512;
 const unsigned int TIMEOUT_MS = 5000; // some big thing...
 
@@ -60,7 +64,7 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
     
     // 
     while(offset < total) {
-        size_t chunk = min((size_t)MAX_BUFLEN, total - offset);
+        size_t chunk = min((size_t)MAX_TRANSFER, total - offset);
         size_t aligned = (chunk + SECTOR_SIZE - 1) / SECTOR_SIZE * SECTOR_SIZE;
         __u32 nlb = (__u32) (aligned / SECTOR_SIZE - 1);
 
@@ -73,7 +77,7 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
         __u32 slba_high = (__u32)(slba >> 32);
 
         int ret = nvme_passthru(
-            0x01, // read opcode
+            NVME_CMD_WRITE, // write opcode
             NSID,
             slba_low, // cwd 10
             slba_high, // cwd 11
@@ -95,9 +99,6 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
 
     }
     return 0; 
-
-
-    return -1; // placeholder
 }
 
 int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
@@ -123,7 +124,7 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
     
     // 
     while(offset < size) {
-        size_t chunk = min((size_t)MAX_BUFLEN, size - offset);
+        size_t chunk = min((size_t)MAX_TRANSFER, size - offset);
         size_t aligned = (chunk + SECTOR_SIZE - 1) / SECTOR_SIZE * SECTOR_SIZE;
         __u32 nlb = (__u32) (aligned / SECTOR_SIZE - 1);
 
@@ -134,7 +135,7 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
         __u32 slba_high = (__u32)(slba >> 32);
 
         int ret = nvme_passthru(
-            0x02, // read opcode
+            NVME_CMD_READ, // read opcode
             NSID,
             slba_low, // cwd 10
             slba_high, // cwd 11

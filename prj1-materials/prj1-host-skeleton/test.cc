@@ -9,7 +9,7 @@ using namespace std;
 using namespace Embedded;
 
 #define PAGE_SIZE 4096
-#define DEV_PATH "/dev/nvme1n1"  /* Device path (check with lsblk or sudo nvme list, and modify if needed) */
+#define DEV_PATH "/dev/nvme0n1"  /* Device path (check with lsblk or sudo nvme list, and modify if needed) */
 
 // Uncomment to enable Task 3
 // #define TASK3_ON
