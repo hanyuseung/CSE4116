@@ -21,13 +21,13 @@ const unsigned int PAGE_SIZE = 4096;
 const unsigned int MAX_BUFLEN = 16*1024*1024; /* Maximum transfer size (can be adjusted if needed) */
 const unsigned int NSID = 1; /* NSID can be checked using 'sudo nvme list' */
 
-const unsigned int MAX_TRANSFER = 1*1024* 1024; // 1MB.
+const unsigned int MAX_TRANSFER = 4* 1024; // 4KB.
 const unsigned int SECTOR_SIZE = 512;
 const unsigned int TIMEOUT_MS = 5000; // some big thing...
 
 int Embedded::Proj1::Open(const std::string &dev) {
     int err;
-    err = open(dev.c_str(), O_RDONLY);
+    err = open(dev.c_str(), O_RDWR); // not RDonly?
     if (err < 0)
         return -1;
     fd_ = err;
@@ -65,7 +65,7 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
     // 
     while(offset < total) {
         size_t chunk = min((size_t)MAX_TRANSFER, total - offset);
-        size_t aligned = (chunk + SECTOR_SIZE - 1) / SECTOR_SIZE * SECTOR_SIZE;
+        size_t aligned = (chunk + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
         __u32 nlb = (__u32) (aligned / SECTOR_SIZE - 1);
 
         void *tmp = nullptr;
@@ -95,7 +95,7 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
         free(tmp);
 
         slba += aligned / SECTOR_SIZE;
-        offset += chunk;
+        offset += aligned;
 
     }
     return 0; 
@@ -125,8 +125,8 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
     // 
     while(offset < size) {
         size_t chunk = min((size_t)MAX_TRANSFER, size - offset);
-        size_t aligned = (chunk + SECTOR_SIZE - 1) / SECTOR_SIZE * SECTOR_SIZE;
-        __u32 nlb = (__u32) (aligned / SECTOR_SIZE - 1);
+        size_t aligned = (chunk + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+        __u32 nlb = (__u32)(aligned / SECTOR_SIZE - 1);
 
         void *tmp = nullptr;
         if(posix_memalign(&tmp, PAGE_SIZE, aligned) != 0) return - ENOMEM;
@@ -153,7 +153,7 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
         free(tmp);
 
         slba += aligned / SECTOR_SIZE;
-        offset += chunk;
+        offset += aligned;
 
     }
     return 0; 
@@ -176,31 +176,27 @@ int Embedded::Proj1::nvme_passthru(
     __u32 cdw10,
     __u32 cdw11,
     __u32 cdw12,
-    void *buf, // why not  u64? Use pointer t to validate the address.
+    void *buf,
     __u32 length
 )
 {
+    struct nvme_user_io io;
+    memset(&io, 0, sizeof(io));
+
+    io.opcode   = opcode;
+    io.addr     = (__u64)(uintptr_t)buf;
+    io.slba     = ((__u64)cdw11 << 32) | cdw10;  // slba 재조합
+    io.nblocks  = (__u16)cdw12;                   // nlb
     
+    int ret = ioctl(fd_, NVME_IOCTL_SUBMIT_IO, &io);
 
-    struct nvme_passthru_cmd cmd;
-    memset(&cmd, 0, sizeof(cmd));
-
-    cmd.opcode = opcode;
-    cmd.nsid = nsid;
-    cmd.cdw10 = cdw10;
-    cmd.cdw11 = cdw11;
-    cmd.cdw12 = cdw12;
-    cmd.addr = (__u64)(uintptr_t)buf;
-    cmd.data_len = length;
-    cmd.timeout_ms = TIMEOUT_MS;
-
-    int ret = ioctl(fd_, NVME_IOCTL_IO_CMD, &cmd);
-
-    
-
-    return (ret!=0) ? -errno : 0; // error? return some negative error code.
-
-
+    if (ret != 0) {
+        cerr << "[ioctl error] ret=" << ret
+             << " errno=" << errno
+             << " (" << strerror(errno) << ")" << endl;
+        return -errno;
+    }
+    return 0;
 /* ------------------------------------------------------------------
      * TODO: Implement this function.
      * This function should serve as the low-level interface for issuing
