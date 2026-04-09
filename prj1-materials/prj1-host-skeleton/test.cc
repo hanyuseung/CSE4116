@@ -12,7 +12,7 @@ using namespace Embedded;
 #define DEV_PATH "/dev/nvme0n1"  /* Device path (check with lsblk or sudo nvme list, and modify if needed) */
 
 // Uncomment to enable Task 3
-// #define TASK3_ON
+//#define TASK3_ON
 
 #ifndef TASK3_ON
 // ------------------------

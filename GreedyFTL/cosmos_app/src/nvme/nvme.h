@@ -83,6 +83,8 @@
 #define IO_NVM_FLUSH										0x00
 #define IO_NVM_WRITE										0x01
 #define IO_NVM_READ											0x02
+// defined at 1 - task 3
+#define IO_NVM_HELLO										0x03
 #define IO_NVM_WRITE_UNCORRECTABLE							0x04
 #define IO_NVM_COMPARE										0x05
 #define IO_NVM_DATASET_MANAGEMENT							0x09

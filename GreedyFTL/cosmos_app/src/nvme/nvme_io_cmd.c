@@ -117,6 +117,19 @@ void handle_nvme_io_write(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
 	ReqTransNvmeToSlice(cmdSlotTag, startLba[0] + (storageCapacity_L / USER_CHANNELS) * (nsid - 1), nlb, IO_NVM_WRITE);
 }
 
+void handle_nvme_io_hello()
+{
+	/*Name: Gildong Hong
+	Student ID: 20241234
+	Affiliation: Sogang University Computer Science and Engineering 
+	Interests: Embedded Systems and Operating Systems
+	Hobbies: Soccer, Movies*/
+	xil_printf("Name: Han Yuseung \nStudent ID: 20211607 \nAffiliation: Sogang University Computer Science and Engineering \nInterests: Embedded Systems, Operating Systems and LG \n Hobbies: Music, Game\n");
+
+	// ... And need some function to call nvme... set_auto_nvme_release?
+
+}
+
 void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 {
 	NVME_IO_COMMAND *nvmeIOCmd;
@@ -145,7 +158,7 @@ void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 		}
 		case IO_NVM_WRITE:
 		{
-//			xil_printf("IO Write Command\r\n");
+			//xil_printf("IO Write Command\r\n");
 			handle_nvme_io_write(nvmeCmd->cmdSlotTag, nvmeIOCmd);
 			break;
 		}
@@ -153,6 +166,12 @@ void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 		{
 //			xil_printf("IO Read Command\r\n");
 			handle_nvme_io_read(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+			break;
+		}
+		case IO_NVM_HELLO:
+		{
+			xil_printf("IO Hello Command\r\n");
+			handle_nvme_io_hello();
 			break;
 		}
 		default:

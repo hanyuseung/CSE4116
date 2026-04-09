@@ -21,13 +21,13 @@ const unsigned int PAGE_SIZE = 4096;
 const unsigned int MAX_BUFLEN = 16*1024*1024; /* Maximum transfer size (can be adjusted if needed) */
 const unsigned int NSID = 1; /* NSID can be checked using 'sudo nvme list' */
 
-const unsigned int MAX_TRANSFER = 4* 1024; // 4KB.
-const unsigned int SECTOR_SIZE = 512;
+const unsigned int MAX_TRANSFER = 256*1024; // 4*64KB.
+const unsigned int SECTOR_SIZE = 4096;
 const unsigned int TIMEOUT_MS = 5000; // some big thing...
 
 int Embedded::Proj1::Open(const std::string &dev) {
     int err;
-    err = open(dev.c_str(), O_RDWR); // not RDonly?
+    err = open(dev.c_str(), O_RDONLY); // not RDonly?
     if (err < 0)
         return -1;
     fd_ = err;
@@ -188,7 +188,19 @@ int Embedded::Proj1::Hello() {
      * Return 0 on success, or a negative error code on failure.
      * ------------------------------------------------------------------ */
 
-    return -1; // placeholder
+    // call nvme passthru - only need opcode. so fill other parameter with dummy data.
+    int ret = nvme_passthru(
+        NVME_CMD_HELLO, 
+        NSID,
+        __u32(0),
+        __u32(0),
+        __u32(0),
+        NULL,
+        __u32(0)
+    );
+    cout << "hello start!\n";
+
+    return ret; 
 }
 
 // IOCTL call -> 
@@ -202,15 +214,18 @@ int Embedded::Proj1::nvme_passthru(
     __u32 length
 )
 {
-    struct nvme_user_io io;
-    memset(&io, 0, sizeof(io));
+    struct nvme_passthru_cmd cm;
+    memset(&cm, 0, sizeof(cm));
+    cm.nsid     = nsid;
+    cm.opcode   = opcode;
+    cm.addr     = (__u64)(uintptr_t)buf;
+    cm.cdw10    = cdw10;
+    cm.cdw11    = cdw11;
+    cm.cdw12    = cdw12;  // nlb
+    cm.data_len = length;
 
-    io.opcode   = opcode;
-    io.addr     = (__u64)(uintptr_t)buf;
-    io.slba     = ((__u64)cdw11 << 32) | cdw10;  // slba 재조합
-    io.nblocks  = (__u16)cdw12;                   // nlb
-
-    int ret = ioctl(fd_, NVME_IOCTL_SUBMIT_IO, &io); // why use user IO
+    //cout << cdw10 <<" "<< cdw11<<" " << cdw12 << " "<< length;
+    int ret = ioctl(fd_, NVME_IOCTL_IO_CMD, &cm); 
 
     if (ret != 0) {
         cerr << "[ioctl error] ret=" << ret
