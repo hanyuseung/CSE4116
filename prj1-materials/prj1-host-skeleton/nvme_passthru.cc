@@ -81,9 +81,9 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
             NSID,
             slba_low, // cwd 10
             slba_high, // cwd 11
-            nlb,
-            tmp,
-            (__u32)aligned
+            nlb, // cdw 12
+            tmp, // *buf
+            (__u32)aligned // length
         );
 
         if(ret < 0) {
@@ -121,16 +121,38 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
     __u64 slba = 0;
     
 
+    /* ------------------------------------------------------------------
+     * How to align chunk?
+     * 
+     * Think about saving 4000byte data. you have to align it to 
+     * PAGE SIZE = 4096. 96 byte will remain as empty. 
+     * So we have to align at "올림", use (N + PAGE SIZE -1) * PAGE SIZE.
+     * 
+     * Think about sending "chunk = 454650"
+     *  Align = (454650 + 4095) / 4096 * 4096 = 454656 (올림)
+     *  SLBA = 0.
+     *  NLB = 454656 / SECTOR SIZE  -1 = 887
+     *  => send done
+     * 
+     *  SLBA = 888
+     *  ...
+     * ------------------------------------------------------------------ */
     
-    // 
+    // 자르기.
     while(offset < size) {
         size_t chunk = min((size_t)MAX_TRANSFER, size - offset);
         size_t aligned = (chunk + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+
+        // nlb: Number of Logical Block (0 based.)
         __u32 nlb = (__u32)(aligned / SECTOR_SIZE - 1);
 
         void *tmp = nullptr;
         if(posix_memalign(&tmp, PAGE_SIZE, aligned) != 0) return - ENOMEM;
         memset(tmp, 0, aligned);
+
+        // slba : starting logical block address
+
+
         __u32 slba_low = (__u32)(slba & 0xFFFFFFFF);
         __u32 slba_high = (__u32)(slba >> 32);
 
@@ -187,8 +209,8 @@ int Embedded::Proj1::nvme_passthru(
     io.addr     = (__u64)(uintptr_t)buf;
     io.slba     = ((__u64)cdw11 << 32) | cdw10;  // slba 재조합
     io.nblocks  = (__u16)cdw12;                   // nlb
-    
-    int ret = ioctl(fd_, NVME_IOCTL_SUBMIT_IO, &io);
+
+    int ret = ioctl(fd_, NVME_IOCTL_SUBMIT_IO, &io); // why use user IO
 
     if (ret != 0) {
         cerr << "[ioctl error] ret=" << ret
