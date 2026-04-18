@@ -22,7 +22,6 @@ const unsigned int MAX_BUFLEN = 16*1024*1024; /* Maximum transfer size (can be a
 const unsigned int NSID = 1; /* NSID can be checked using 'sudo nvme list' */
 
 const unsigned int MAX_TRANSFER = 256*1024; // 4*64KB.
-const unsigned int SECTOR_SIZE = 4096;
 const unsigned int TIMEOUT_MS = 5000; // some big thing...
 
 int Embedded::Proj1::Open(const std::string &dev) {
@@ -66,7 +65,7 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
     while(offset < total) {
         size_t chunk = min((size_t)MAX_TRANSFER, total - offset);
         size_t aligned = (chunk + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
-        __u32 nlb = (__u32) (aligned / SECTOR_SIZE - 1);
+        __u32 nlb = (__u32) (aligned / PAGE_SIZE - 1);
 
         void *tmp = nullptr;
         if(posix_memalign(&tmp, PAGE_SIZE, aligned) != 0) return - ENOMEM;
@@ -94,7 +93,7 @@ int Embedded::Proj1::ImageWrite(const std::vector<uint8_t> &buf) {
         
         free(tmp);
 
-        slba += aligned / SECTOR_SIZE;
+        slba += aligned / PAGE_SIZE;
         offset += aligned;
 
     }
@@ -144,7 +143,7 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
         size_t aligned = (chunk + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
 
         // nlb: Number of Logical Block (0 based.)
-        __u32 nlb = (__u32)(aligned / SECTOR_SIZE - 1);
+        __u32 nlb = (__u32)(aligned / PAGE_SIZE - 1);
 
         void *tmp = nullptr;
         if(posix_memalign(&tmp, PAGE_SIZE, aligned) != 0) return - ENOMEM;
@@ -174,7 +173,7 @@ int Embedded::Proj1::ImageRead(std::vector<uint8_t> &buf, size_t size) {
         memcpy (buf.data() + offset, tmp, chunk);
         free(tmp);
 
-        slba += aligned / SECTOR_SIZE;
+        slba += aligned / PAGE_SIZE;
         offset += aligned;
 
     }
