@@ -60,6 +60,7 @@
 
 #include "../ftl_config.h"
 #include "../request_transform.h"
+#include "../address_translation.h"
 
 void handle_nvme_io_read(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
 {

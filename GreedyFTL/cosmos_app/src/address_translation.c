@@ -87,6 +87,17 @@ void InitAddressMap()
 	InitBlockDieMap();
 }
 
+
+/* user function */
+void InitBlockMap()
+{
+	int lbn;
+	for(lbn = 0; lbn < USER_BLOCKS_PER_SSD; lbn++)
+    	logicalBlockMapPtr->logicalBlock[lbn].PBN = BLOCK_NONE;
+
+}
+
+
 void InitSliceMap()
 {
 	int sliceAddr;

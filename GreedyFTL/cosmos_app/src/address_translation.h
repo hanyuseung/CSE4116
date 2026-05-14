@@ -108,6 +108,11 @@
 #define Pcw2VdieTranslation(chNo, wayNo) ((chNo) + (wayNo) * (USER_CHANNELS))
 #define PlsbPage2VpageTranslation(pageNo) ((pageNo) > (0) ? ( ((pageNo) + 1) / 2): (0))
 
+
+/* user define */
+// #define BLOCKS_PER_SSD (SLICES_PER_SSD / SLICES_PER_BLOCK) already have user block per ssd
+
+
 //for logical to virtual translation
 typedef struct _LOGICAL_SLICE_ENTRY {
 	unsigned int virtualSliceAddr;
@@ -116,6 +121,19 @@ typedef struct _LOGICAL_SLICE_ENTRY {
 typedef struct _LOGICAL_SLICE_MAP {
 	LOGICAL_SLICE_ENTRY logicalSlice[SLICES_PER_SSD];
 } LOGICAL_SLICE_MAP, *P_LOGICAL_SLICE_MAP;
+
+
+/* user define */
+typedef struct _LOGICAL_BLOCK_ENTRY
+{ unsigned int PBN;
+}LOGICAL_BLOCK_ENTRY, *P_LOGICAL_BLOCK_ENTRY;
+
+typedef struct _LOGICAL_BLOCK_MAP {
+	LOGICAL_BLOCK_ENTRY logicalBlock[USER_BLOCKS_PER_SSD];
+} LOGICAL_BLOCK_MAP, *P_LOGICAL_BLOCK_MAP;
+
+
+
 
 
 //for virtual to logical  translation
@@ -184,6 +202,10 @@ typedef struct _PHY_BLOCK_MAP {
 } PHY_BLOCK_MAP, *P_PHY_BLOCK_MAP;
 
 
+
+
+void InitBLockMap();
+
 void InitAddressMap();
 void InitSliceMap();
 void InitBlockDieMap();
@@ -210,6 +232,9 @@ extern P_VIRTUAL_BLOCK_MAP virtualBlockMapPtr;
 extern P_VIRTUAL_DIE_MAP virtualDieMapPtr;
 extern P_PHY_BLOCK_MAP phyBlockMapPtr;
 extern P_BAD_BLOCK_TABLE_INFO_MAP bbtInfoMapPtr;
+
+/* user define */
+extern P_LOGICAL_BLOCK_MAP logicalBlockMapPtr;
 
 extern unsigned char sliceAllocationTargetDie;
 extern unsigned int mbPerbadBlockSpace;
