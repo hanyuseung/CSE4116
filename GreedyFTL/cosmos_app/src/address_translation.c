@@ -87,17 +87,6 @@ void InitAddressMap()
 	InitBlockDieMap();
 }
 
-
-/* user function */
-void InitBlockMap()
-{
-	int lbn;
-	for(lbn = 0; lbn < USER_BLOCKS_PER_SSD; lbn++)
-    	logicalBlockMapPtr->logicalBlock[lbn].PBN = BLOCK_NONE;
-
-}
-
-
 void InitSliceMap()
 {
 	int sliceAddr;
@@ -637,13 +626,23 @@ void InitBlockDieMap()
 
 unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 {
-	unsigned int virtualSliceAddr;
+	unsigned int lbn, offset, blockBaseVsa, virtualSliceAddr;
 
 	if(logicalSliceAddr < SLICES_PER_SSD)
 	{
-		virtualSliceAddr = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
+		// If the macro makes error -> just dont use macro and calculate directly
+		//lbn = Lsa2LbnTranslation(logicalSliceAddr);
+		lbn = logicalSliceAddr/SLICES_PER_BLOCK;
+		offset = logicalSliceAddr%SLICES_PER_BLOCK;
 
-		if(virtualSliceAddr != VSA_NONE)
+		blockBaseVsa = logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr;
+
+		if(blockBaseVsa == VSA_NONE)
+			return VSA_FAIL;
+
+		virtualSliceAddr = Vorg2VsaTranslation(Vsa2VdieTranslation(blockBaseVsa), Vsa2VblockTranslation(blockBaseVsa), offset);
+
+		if(virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr == logicalSliceAddr)
 			return virtualSliceAddr;
 		else
 			return VSA_FAIL;
@@ -654,16 +653,42 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
-	unsigned int virtualSliceAddr;
+	unsigned int lbn, offset, blockBaseVsa, virtualSliceAddr, dieNo, blockNo;
 
 	if(logicalSliceAddr < SLICES_PER_SSD)
 	{
-		InvalidateOldVsa(logicalSliceAddr);
+		lbn = logicalSliceAddr/SLICES_PER_BLOCK;
+		offset = logicalSliceAddr%SLICES_PER_BLOCK;
 
-		virtualSliceAddr = FindFreeVirtualSlice();
+		blockBaseVsa = logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr;
 
-		logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = virtualSliceAddr;
+		if(blockBaseVsa == VSA_NONE)
+		{
+			dieNo = sliceAllocationTargetDie;
+
+			blockNo = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
+			if(blockNo == BLOCK_FAIL)
+				assert(!"[WARNING] There is no available block [WARNING]");
+
+			blockBaseVsa = Vorg2VsaTranslation(dieNo, blockNo, 0);
+			logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr = blockBaseVsa;
+
+			sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
+		}
+		else
+		{
+			dieNo = Vsa2VdieTranslation(blockBaseVsa);
+			blockNo = Vsa2VblockTranslation(blockBaseVsa);
+		}
+
+		virtualSliceAddr = Vorg2VsaTranslation(dieNo, blockNo, offset);
+
+		if(virtualBlockMapPtr->block[dieNo][blockNo].currentPage != offset)
+			offset = virtualBlockMapPtr->block[dieNo][blockNo].currentPage;
+
+		virtualSliceAddr = Vorg2VsaTranslation(dieNo, blockNo, offset);
 		virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr = logicalSliceAddr;
+		virtualBlockMapPtr->block[dieNo][blockNo].currentPage++;
 
 		return virtualSliceAddr;
 	}
@@ -768,12 +793,16 @@ unsigned int FindDieForFreeSliceAllocation()
 
 void InvalidateOldVsa(unsigned int logicalSliceAddr)
 {
-	unsigned int virtualSliceAddr, dieNo, blockNo;
+	unsigned int lbn, offset, blockBaseVsa, virtualSliceAddr, dieNo, blockNo;
 
-	virtualSliceAddr = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
+	lbn = logicalSliceAddr/SLICES_PER_BLOCK;
+	offset = logicalSliceAddr%SLICES_PER_BLOCK;
+	blockBaseVsa = logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr;
 
-	if(virtualSliceAddr != VSA_NONE)
+	if(blockBaseVsa != VSA_NONE)
 	{
+		virtualSliceAddr = Vorg2VsaTranslation(Vsa2VdieTranslation(blockBaseVsa), Vsa2VblockTranslation(blockBaseVsa), offset);
+
 		if(virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr != logicalSliceAddr)
 			return;
 
@@ -783,7 +812,7 @@ void InvalidateOldVsa(unsigned int logicalSliceAddr)
 		// unlink
 		SelectiveGetFromGcVictimList(dieNo, blockNo);
 		virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt++;
-		logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = VSA_NONE;
+		virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr = LSA_NONE;
 
 		PutToGcVictimList(dieNo, blockNo, virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt);
 	}
@@ -928,4 +957,3 @@ void UpdateBadBlockTableForGrownBadBlock(unsigned int tempBufAddr)
 	//update bad block tables in flash
 	SaveBadBlockTable(dieState, tempBbtBufAddr, tempBbtBufEntrySize);
 }
-
