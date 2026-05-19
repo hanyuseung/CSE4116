@@ -56,6 +56,9 @@ P_VIRTUAL_DIE_MAP virtualDieMapPtr;
 P_PHY_BLOCK_MAP phyBlockMapPtr;
 P_BAD_BLOCK_TABLE_INFO_MAP bbtInfoMapPtr;
 
+static MY_LOGICLA_BLOCK_MAPPING_TABLE myBlockMap;
+P_MY_LOGICLA_BLOCK_MAPPING_TABLE myBlockMapPtr;
+
 unsigned char sliceAllocationTargetDie;
 unsigned int mbPerbadBlockSpace;
 
@@ -70,6 +73,7 @@ void InitAddressMap()
 	virtualDieMapPtr = (P_VIRTUAL_DIE_MAP) VIRTUAL_DIE_MAP_ADDR;
 	phyBlockMapPtr = (P_PHY_BLOCK_MAP) PHY_BLOCK_MAP_ADDR;
 	bbtInfoMapPtr = (P_BAD_BLOCK_TABLE_INFO_MAP) BAD_BLOCK_TABLE_INFO_MAP_ADDR;
+	myBlockMapPtr = &myBlockMap;
 
 	//init phyblockMap
 	for(dieNo=0 ; dieNo<USER_DIES ; dieNo++)
@@ -85,7 +89,20 @@ void InitAddressMap()
 
 	InitSliceMap();
 	InitBlockDieMap();
+
+	// 여기
+	InitMyLogicalMap();
 }
+
+
+void InitMyLogicalMap()
+{
+	int blockAddr;
+	for(blockAddr = 0; blockAddr < USER_BLOCKS_PER_SSD; blockAddr++){
+		myBlockMapPtr->logicalBlock[blockAddr].virtualBlockAddr = VSA_NONE;
+	}
+}
+
 
 void InitSliceMap()
 {
@@ -626,22 +643,30 @@ void InitBlockDieMap()
 
 unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 {
-	unsigned int lbn, offset, blockBaseVsa, virtualSliceAddr;
+	unsigned int virtualBlockAddr;
+	unsigned int virtualSliceAddr;
+	unsigned int dieNo;
+	unsigned int tmpblock;
+	unsigned int limit_offset;
 
-	if(logicalSliceAddr < SLICES_PER_SSD)
-	{
-		// If the macro makes error -> just dont use macro and calculate directly
-		//lbn = Lsa2LbnTranslation(logicalSliceAddr);
-		lbn = logicalSliceAddr/SLICES_PER_BLOCK;
-		offset = logicalSliceAddr%SLICES_PER_BLOCK;
 
-		blockBaseVsa = logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr;
+	// Block => slice * 256 단위
+	unsigned int LBN = logicalSliceAddr/256;
+	unsigned int offset = logicalSliceAddr%256;
 
-		if(blockBaseVsa == VSA_NONE)
+	if(LBN < USER_BLOCKS_PER_SSD){
+		virtualBlockAddr = myBlockMapPtr->logicalBlock[LBN].virtualBlockAddr;
+		if(virtualBlockAddr == VSA_NONE)
 			return VSA_FAIL;
-
-		virtualSliceAddr = Vorg2VsaTranslation(Vsa2VdieTranslation(blockBaseVsa), Vsa2VblockTranslation(blockBaseVsa), offset);
-
+		else{
+			// virtual == effectivly physical.
+			dieNo = Vsa2VdieTranslation(virtualBlockAddr);
+			tmpblock = Vsa2VblockTranslation(virtualBlockAddr);
+			limit_offset = virtualBlockMapPtr->block[dieNo][tmpblock].currentPage;
+			// offset이 current page 넘어가면 그냥 current page 읽게. 안그러면 syscall단에서 에러남.
+			offset %= limit_offset;
+			virtualSliceAddr = Vorg2VsaTranslation(Vsa2VdieTranslation(virtualBlockAddr), Vsa2VblockTranslation(virtualBlockAddr), offset);
+		}
 		if(virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr == logicalSliceAddr)
 			return virtualSliceAddr;
 		else
@@ -653,38 +678,40 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 
 unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 {
-	unsigned int lbn, offset, blockBaseVsa, virtualSliceAddr, dieNo, blockNo;
+	unsigned int virtualBlockAddr;
+	unsigned int virtualSliceAddr;
+	unsigned int dieNo;
+	unsigned int blockNo;
+	unsigned int LBN = logicalSliceAddr / 256;
+	unsigned int offset; // = logicalSliceAddr % 256 ... but need to be sequential so...
 
-	if(logicalSliceAddr < SLICES_PER_SSD)
+	if(LBN < USER_BLOCKS_PER_SSD)
 	{
-		lbn = logicalSliceAddr/SLICES_PER_BLOCK;
-		offset = logicalSliceAddr%SLICES_PER_BLOCK;
+		virtualBlockAddr = myBlockMapPtr->logicalBlock[LBN].virtualBlockAddr;
 
-		blockBaseVsa = logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr;
-
-		if(blockBaseVsa == VSA_NONE)
+		if(virtualBlockAddr == VSA_NONE)
 		{
 			dieNo = sliceAllocationTargetDie;
-
 			blockNo = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
+
 			if(blockNo == BLOCK_FAIL)
 				assert(!"[WARNING] There is no available block [WARNING]");
 
-			blockBaseVsa = Vorg2VsaTranslation(dieNo, blockNo, 0);
-			logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr = blockBaseVsa;
-
+			virtualBlockAddr = Vorg2VsaTranslation(dieNo, blockNo, 0);
+			myBlockMapPtr->logicalBlock[LBN].virtualBlockAddr = virtualBlockAddr;
 			sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
 		}
 		else
 		{
-			dieNo = Vsa2VdieTranslation(blockBaseVsa);
-			blockNo = Vsa2VblockTranslation(blockBaseVsa);
+			dieNo = Vsa2VdieTranslation(virtualBlockAddr);
+			blockNo = Vsa2VblockTranslation(virtualBlockAddr);
 		}
 
-		virtualSliceAddr = Vorg2VsaTranslation(dieNo, blockNo, offset);
+		if(virtualBlockMapPtr->block[dieNo][blockNo].currentPage == USER_PAGES_PER_BLOCK)
+			assert(!"[WARNING] Current mapped block is full [WARNING]");
 
-		if(virtualBlockMapPtr->block[dieNo][blockNo].currentPage != offset)
-			offset = virtualBlockMapPtr->block[dieNo][blockNo].currentPage;
+		// write sequentail !!!
+		offset = virtualBlockMapPtr->block[dieNo][blockNo].currentPage;
 
 		virtualSliceAddr = Vorg2VsaTranslation(dieNo, blockNo, offset);
 		virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr = logicalSliceAddr;
@@ -793,16 +820,12 @@ unsigned int FindDieForFreeSliceAllocation()
 
 void InvalidateOldVsa(unsigned int logicalSliceAddr)
 {
-	unsigned int lbn, offset, blockBaseVsa, virtualSliceAddr, dieNo, blockNo;
+	unsigned int virtualSliceAddr, dieNo, blockNo;
 
-	lbn = logicalSliceAddr/SLICES_PER_BLOCK;
-	offset = logicalSliceAddr%SLICES_PER_BLOCK;
-	blockBaseVsa = logicalSliceMapPtr->logicalSlice[lbn].virtualSliceAddr;
+	virtualSliceAddr = logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr;
 
-	if(blockBaseVsa != VSA_NONE)
+	if(virtualSliceAddr != VSA_NONE)
 	{
-		virtualSliceAddr = Vorg2VsaTranslation(Vsa2VdieTranslation(blockBaseVsa), Vsa2VblockTranslation(blockBaseVsa), offset);
-
 		if(virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr != logicalSliceAddr)
 			return;
 
@@ -812,7 +835,7 @@ void InvalidateOldVsa(unsigned int logicalSliceAddr)
 		// unlink
 		SelectiveGetFromGcVictimList(dieNo, blockNo);
 		virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt++;
-		virtualSliceMapPtr->virtualSlice[virtualSliceAddr].logicalSliceAddr = LSA_NONE;
+		logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = VSA_NONE;
 
 		PutToGcVictimList(dieNo, blockNo, virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt);
 	}
