@@ -646,7 +646,7 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 	unsigned int virtualBlockAddr;
 	unsigned int virtualSliceAddr;
 	unsigned int dieNo;
-	unsigned int tmpblock;
+	unsigned int VBN;
 	unsigned int limit_offset;
 
 
@@ -661,8 +661,8 @@ unsigned int AddrTransRead(unsigned int logicalSliceAddr)
 		else{
 			// virtual == effectivly physical.
 			dieNo = Vsa2VdieTranslation(virtualBlockAddr);
-			tmpblock = Vsa2VblockTranslation(virtualBlockAddr);
-			limit_offset = virtualBlockMapPtr->block[dieNo][tmpblock].currentPage;
+			VBN = Vsa2VblockTranslation(virtualBlockAddr);
+			limit_offset = virtualBlockMapPtr->block[dieNo][VBN].currentPage;
 			// offset이 current page 넘어가면 그냥 current page 읽게. 안그러면 syscall단에서 에러남.
 			offset %= limit_offset;
 			virtualSliceAddr = Vorg2VsaTranslation(Vsa2VdieTranslation(virtualBlockAddr), Vsa2VblockTranslation(virtualBlockAddr), offset);
