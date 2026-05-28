@@ -89,6 +89,10 @@
 #define IO_NVM_COMPARE										0x05
 #define IO_NVM_DATASET_MANAGEMENT							0x09
 
+// defined at proj3 !
+#define IO_NVM_KV_PUT 										0xA0
+#define IO_NVM_KV_GET 										0xA1
+
 /*Status Code Type */
 #define SCT_GENERIC_COMMAND_STATUS							0
 #define SCT_COMMAND_SPECIFIC_STATUS							1

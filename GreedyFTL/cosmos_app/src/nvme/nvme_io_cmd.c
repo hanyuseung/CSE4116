@@ -126,9 +126,23 @@ void handle_nvme_io_hello()
 	Hobbies: Soccer, Movies*/
 	xil_printf("Name: Han Yuseung \nStudent ID: 20211607 \nAffiliation: Sogang University Computer Science and Engineering \nInterests: Embedded Systems, Operating Systems and LG \n Hobbies: Music, Game\n");
 
-	// ... And need some function to call nvme... set_auto_nvme_release?
-
+	// ... And need some function to call nvme... set_auto_nvme_release? no...
 }
+
+
+// Task3.
+void handle_nvme_kv_put(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd){
+	/*************************************************
+	 * 1. 
+	 **************************************************/
+}
+
+void handle_nvme_kv_get(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd){
+	
+}
+
+
+
 
 void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 {
@@ -178,6 +192,16 @@ void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 			set_auto_nvme_cpl(nvmeCmd->cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
 			break;
 		}
+		// Task3
+		case IO_NVM_KV_GET:
+		{
+			handle_nvme_kv_get(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+		}
+		case IO_NVM_KV_PUT:
+		{
+			handle_nvme_kv_put(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+		}
+
 		default:
 		{
 			xil_printf("Not Support IO Command OPC: %X\r\n", opc);
