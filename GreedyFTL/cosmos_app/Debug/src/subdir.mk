@@ -11,6 +11,7 @@ C_SRCS += \
 ../src/data_buffer.c \
 ../src/ftl_config.c \
 ../src/garbage_collection.c \
+../src/kv_store.c \
 ../src/main.c \
 ../src/nsc_driver.c \
 ../src/request_allocation.c \
@@ -22,6 +23,7 @@ OBJS += \
 ./src/data_buffer.o \
 ./src/ftl_config.o \
 ./src/garbage_collection.o \
+./src/kv_store.o \
 ./src/main.o \
 ./src/nsc_driver.o \
 ./src/request_allocation.o \
@@ -33,6 +35,7 @@ C_DEPS += \
 ./src/data_buffer.d \
 ./src/ftl_config.d \
 ./src/garbage_collection.d \
+./src/kv_store.d \
 ./src/main.d \
 ./src/nsc_driver.d \
 ./src/request_allocation.d \
@@ -47,5 +50,4 @@ src/%.o: ../src/%.c
 	arm-none-eabi-gcc -Wall -O0 -g3 -c -fmessage-length=0 -MT"$@" -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -I../../cosmos_app_bsp/ps7_cortexa9_0/include -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
-
 

@@ -70,6 +70,7 @@ void InitFTL()
 	InitGcVictimMap();
 
 	storageCapacity_L = (MB_PER_SSD - (MB_PER_MIN_FREE_BLOCK_SPACE + mbPerbadBlockSpace + MB_PER_OVER_PROVISION_BLOCK_SPACE)) * ((1024*1024) / BYTES_PER_NVME_BLOCK);
+	InitKvStore();
 
 	xil_printf("[ storage capacity %d MB ]\r\n", storageCapacity_L / ((1024*1024) / BYTES_PER_NVME_BLOCK));
 	xil_printf("[ ftl configuration complete. ]\r\n");
@@ -202,6 +203,8 @@ void CheckConfigRestriction()
 		assert(!"[WARNING] Configuration Error: Data buffer size is too large to be allocated to predefined range [WARNING]");
 	if(TEMPORARY_PAY_LOAD_ADDR + 0x00001000 > DATA_BUFFER_MAP_ADDR)
 		assert(!"[WARNING] Configuration Error: Metadata for NAND request completion process is too large to be allocated to predefined range [WARNING]");
+	if(KV_INDEX_END_ADDR > RESERVED0_END_ADDR)
+		assert(!"[WARNING] Configuration Error: KV index is too large to be allocated to predefined range [WARNING]");
 	if(FTL_MANAGEMENT_END_ADDR > DRAM_END_ADDR)
 		assert(!"[WARNING] Configuration Error: Metadata of FTL is too large to be allocated to DRAM [WARNING]");
 }

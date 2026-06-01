@@ -114,8 +114,10 @@ typedef struct _NVME_DMA_INFO{
 	unsigned int nvmeBlockOffset : 16;
 	unsigned int numOfNvmeBlock : 16;
 	unsigned int reqTail	: 8;
-	unsigned int reserved0 : 8;
+	unsigned int customCompletion : 1;
+	unsigned int reserved0 : 7;
 	unsigned int overFlowCnt;
+	unsigned int completionSpecific;
 } NVME_DMA_INFO, *P_NVME_DMA_INFO;
 
 

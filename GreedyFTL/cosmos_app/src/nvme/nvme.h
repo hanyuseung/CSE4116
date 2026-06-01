@@ -168,6 +168,9 @@
 #define SC_INVALID_PROTECTION_INFORMATION					0x81//Compare, Read, Write, Write Zeroes
 #define SC_ATTEMPTED_WRITE_TO_READ_ONLY_RANGE				0x82//Dataset Management, Write, Write Uncorrectable, Write Zeroes
 
+/* Status Code - Vendor Specific Status Values */
+#define SC_KV_KEY_NOT_EXIST									0xC1
+
 /*Status Code - Media and Data Integrity Error Values, NVM Command Set */
 #define SC_WRITE_FAULT										0x80
 #define SC_UNRECOVERED_READ_ERROR							0x81

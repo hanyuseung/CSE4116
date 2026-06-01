@@ -75,7 +75,7 @@ void InitDependencyTable()
 	}
 }
 
-void ReqTransNvmeToSlice(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int cmdCode)
+static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int cmdCode, unsigned int customCompletion, unsigned int completionSpecific)
 {
 	unsigned int reqSlotTag, requestedNvmeBlock, tempNumOfNvmeBlock, transCounter, tempLsa, loop, nvmeBlockOffset, nvmeDmaStartIndex, reqCode;
 
@@ -108,6 +108,8 @@ void ReqTransNvmeToSlice(unsigned int cmdSlotTag, unsigned int startLba, unsigne
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.startIndex = nvmeDmaStartIndex;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion = customCompletion;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
 
 	PutToSliceReqQ(reqSlotTag);
 
@@ -130,6 +132,8 @@ void ReqTransNvmeToSlice(unsigned int cmdSlotTag, unsigned int startLba, unsigne
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.startIndex = nvmeDmaStartIndex;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
+		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion = customCompletion;
+		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
 
 		PutToSliceReqQ(reqSlotTag);
 
@@ -153,8 +157,20 @@ void ReqTransNvmeToSlice(unsigned int cmdSlotTag, unsigned int startLba, unsigne
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.startIndex = nvmeDmaStartIndex;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion = customCompletion;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
 
 	PutToSliceReqQ(reqSlotTag);
+}
+
+void ReqTransNvmeToSlice(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int cmdCode)
+{
+	ReqTransNvmeToSliceWithCompletion(cmdSlotTag, startLba, nlb, cmdCode, NVME_COMMAND_AUTO_COMPLETION_ON, 0);
+}
+
+void ReqTransKvGetToSlice(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int valueLength)
+{
+	ReqTransNvmeToSliceWithCompletion(cmdSlotTag, startLba, nlb, IO_NVM_READ, NVME_COMMAND_AUTO_COMPLETION_OFF, valueLength);
 }
 
 
@@ -584,7 +600,7 @@ void IssueNvmeDmaReq(unsigned int reqSlotTag)
 	{
 		while(numOfNvmeBlock < reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock)
 		{
-			set_auto_rx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, NVME_COMMAND_AUTO_COMPLETION_ON);
+				set_auto_rx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion);
 
 			numOfNvmeBlock++;
 			dmaIndex++;
@@ -597,7 +613,7 @@ void IssueNvmeDmaReq(unsigned int reqSlotTag)
 	{
 		while(numOfNvmeBlock < reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock)
 		{
-			set_auto_tx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, NVME_COMMAND_AUTO_COMPLETION_ON);
+				set_auto_tx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion);
 
 			numOfNvmeBlock++;
 			dmaIndex++;
@@ -614,6 +630,7 @@ void CheckDoneNvmeDmaReq()
 {
 	unsigned int reqSlotTag, prevReq;
 	unsigned int rxDone, txDone;
+	unsigned int cmdSlotTag, completionSpecific, customCompletion;
 
 	reqSlotTag = nvmeDmaReqQ.tailReq;
 	rxDone = 0;
@@ -628,21 +645,34 @@ void CheckDoneNvmeDmaReq()
 			if(!rxDone)
 				rxDone = check_auto_rx_dma_partial_done(reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.reqTail , reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.overFlowCnt);
 
-			if(rxDone)
-				SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
+				if(rxDone)
+				{
+					cmdSlotTag = reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag;
+					completionSpecific = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific;
+					customCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion;
+					SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
+					if(customCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
+						set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
+				}
 		}
 		else
 		{
 			if(!txDone)
 				txDone = check_auto_tx_dma_partial_done(reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.reqTail , reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.overFlowCnt);
 
-			if(txDone)
-				SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
+				if(txDone)
+				{
+					cmdSlotTag = reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag;
+					completionSpecific = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific;
+					customCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion;
+					SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
+					if(customCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
+						set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
+				}
 		}
 
 		reqSlotTag = prevReq;
 	}
 }
-
 
 

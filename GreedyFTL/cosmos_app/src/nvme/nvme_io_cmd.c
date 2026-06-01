@@ -59,6 +59,7 @@
 #include "nvme_io_cmd.h"
 
 #include "../ftl_config.h"
+#include "../kv_store.h"
 #include "../request_transform.h"
 
 // NVME pass through need is in this code.
@@ -130,17 +131,65 @@ void handle_nvme_io_hello()
 }
 
 
-// Task3.
-void handle_nvme_kv_put(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd){
-	/*************************************************
-	 * 1. 
-	 **************************************************/
+static void complete_nvme_kv_error(unsigned int cmdSlotTag, unsigned int statusCodeType, unsigned int statusCode)
+{
+	NVME_COMPLETION nvmeCPL;
+
+	nvmeCPL.dword[0] = 0;
+	nvmeCPL.statusField.SCT = statusCodeType;
+	nvmeCPL.statusField.SC = statusCode;
+	set_auto_nvme_cpl(cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
 }
 
-void handle_nvme_kv_get(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd){
-	
+void handle_nvme_kv_put(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
+{
+	unsigned int key, logicalSliceAddr, nlb, valueLength;
+
+	key = nvmeIOCmd->dword[10];
+	nlb = nvmeIOCmd->dword[12];
+	valueLength = nvmeIOCmd->dword[13];
+
+	if((nlb != 0) || (valueLength == 0) || (valueLength > BYTES_PER_NVME_BLOCK))
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_INVALID_FIELD_IN_COMMAND);
+		return;
+	}
+
+	logicalSliceAddr = AllocateKvLogicalSlice();
+	if(logicalSliceAddr == KV_LSA_NONE)
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_CAPACITY_EXCEEDED);
+		return;
+	}
+
+	if(!PutKvIndexEntry(key, logicalSliceAddr, valueLength))
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_CAPACITY_EXCEEDED);
+		return;
+	}
+
+	ReqTransNvmeToSlice(cmdSlotTag, logicalSliceAddr * NVME_BLOCKS_PER_SLICE, nlb, IO_NVM_WRITE);
 }
 
+void handle_nvme_kv_get(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
+{
+	unsigned int key, logicalSliceAddr, valueLength;
+
+	key = nvmeIOCmd->dword[10];
+	if(nvmeIOCmd->dword[12] >= MAX_NUM_OF_NLB)
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_INVALID_FIELD_IN_COMMAND);
+		return;
+	}
+
+	if(!FindKvIndexEntry(key, &logicalSliceAddr, &valueLength))
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_VENDOR_SPECIFIC, SC_KV_KEY_NOT_EXIST);
+		return;
+	}
+
+	ReqTransKvGetToSlice(cmdSlotTag, logicalSliceAddr * NVME_BLOCKS_PER_SLICE, nvmeIOCmd->dword[12], valueLength);
+}
 
 
 
@@ -193,14 +242,16 @@ void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 			break;
 		}
 		// Task3
-		case IO_NVM_KV_GET:
-		{
-			handle_nvme_kv_get(nvmeCmd->cmdSlotTag, nvmeIOCmd);
-		}
-		case IO_NVM_KV_PUT:
-		{
-			handle_nvme_kv_put(nvmeCmd->cmdSlotTag, nvmeIOCmd);
-		}
+			case IO_NVM_KV_GET:
+			{
+				handle_nvme_kv_get(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+				break;
+			}
+			case IO_NVM_KV_PUT:
+			{
+				handle_nvme_kv_put(nvmeCmd->cmdSlotTag, nvmeIOCmd);
+				break;
+			}
 
 		default:
 		{
@@ -210,4 +261,3 @@ void handle_nvme_io_cmd(NVME_COMMAND *nvmeCmd)
 		}
 	}
 }
-

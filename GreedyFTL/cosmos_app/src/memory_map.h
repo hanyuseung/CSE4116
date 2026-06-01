@@ -53,6 +53,7 @@
 #include "request_schedule.h"
 #include "request_transform.h"
 #include "garbage_collection.h"
+#include "kv_store.h"
 
 #define DRAM_START_ADDR					0x00100000
 
@@ -64,6 +65,10 @@
 
 #define RESERVED0_START_ADDR			0x00300000
 #define RESERVED0_END_ADDR				0x0FFFFFFF
+
+// for key-value index
+#define KV_INDEX_ADDR					RESERVED0_START_ADDR
+#define KV_INDEX_END_ADDR				(KV_INDEX_ADDR + sizeof(KV_INDEX) - 1)
 
 #define FTL_MANAGEMENT_START_ADDR		0x10000000
 // Uncached & Unbuffered
