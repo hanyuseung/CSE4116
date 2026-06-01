@@ -11,7 +11,7 @@ src/request_transform.o src/request_transform.o: \
  ../../cosmos_app_bsp/ps7_cortexa9_0/include/xparameters.h \
  ../src/address_translation.h ../src/request_allocation.h \
  ../src/request_format.h ../src/request_queue.h ../src/request_schedule.h \
- ../src/request_transform.h ../src/garbage_collection.h
+ ../src/request_transform.h ../src/garbage_collection.h ../src/kv_store.h
 
 ../../cosmos_app_bsp/ps7_cortexa9_0/include/xil_printf.h:
 
@@ -52,3 +52,5 @@ src/request_transform.o src/request_transform.o: \
 ../src/request_transform.h:
 
 ../src/garbage_collection.h:
+
+../src/kv_store.h:

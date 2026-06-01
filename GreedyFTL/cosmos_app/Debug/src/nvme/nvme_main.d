@@ -14,7 +14,8 @@ src/nvme/nvme_main.o src/nvme/nvme_main.o: ../src/nvme/nvme_main.c \
  ../src/nvme/../nvme/nvme.h ../src/nvme/../address_translation.h \
  ../src/nvme/../request_allocation.h ../src/nvme/../request_format.h \
  ../src/nvme/../request_queue.h ../src/nvme/../request_schedule.h \
- ../src/nvme/../request_transform.h ../src/nvme/../garbage_collection.h
+ ../src/nvme/../request_transform.h ../src/nvme/../garbage_collection.h \
+ ../src/nvme/../kv_store.h
 
 ../../cosmos_app_bsp/ps7_cortexa9_0/include/xil_printf.h:
 
@@ -67,3 +68,5 @@ src/nvme/nvme_main.o src/nvme/nvme_main.o: ../src/nvme/nvme_main.c \
 ../src/nvme/../request_transform.h:
 
 ../src/nvme/../garbage_collection.h:
+
+../src/nvme/../kv_store.h:

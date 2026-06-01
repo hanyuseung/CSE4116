@@ -9,8 +9,8 @@ src/nvme/nvme_io_cmd.o src/nvme/nvme_io_cmd.o: ../src/nvme/nvme_io_cmd.c \
  ../src/nvme/../ftl_config.h ../src/nvme/../nsc_driver.h \
  ../src/nvme/../t4nsc_pm.h \
  ../../cosmos_app_bsp/ps7_cortexa9_0/include/xparameters.h \
- ../src/nvme/../nvme/nvme.h ../src/nvme/../request_transform.h \
- ../src/nvme/../ftl_config.h
+ ../src/nvme/../nvme/nvme.h ../src/nvme/../kv_store.h \
+ ../src/nvme/../request_transform.h ../src/nvme/../ftl_config.h
 
 ../../cosmos_app_bsp/ps7_cortexa9_0/include/xil_printf.h:
 
@@ -41,6 +41,8 @@ src/nvme/nvme_io_cmd.o src/nvme/nvme_io_cmd.o: ../src/nvme/nvme_io_cmd.c \
 ../../cosmos_app_bsp/ps7_cortexa9_0/include/xparameters.h:
 
 ../src/nvme/../nvme/nvme.h:
+
+../src/nvme/../kv_store.h:
 
 ../src/nvme/../request_transform.h:
 

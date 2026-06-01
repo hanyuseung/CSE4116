@@ -10,7 +10,7 @@ src/ftl_config.o src/ftl_config.o: ../src/ftl_config.c \
  ../src/nvme/nvme.h ../src/address_translation.h \
  ../src/request_allocation.h ../src/request_format.h \
  ../src/request_queue.h ../src/request_schedule.h \
- ../src/request_transform.h ../src/garbage_collection.h \
+ ../src/request_transform.h ../src/garbage_collection.h ../src/kv_store.h \
  ../src/t4nsc_ucode.h
 
 ../../cosmos_app_bsp/ps7_cortexa9_0/include/xil_printf.h:
@@ -50,5 +50,7 @@ src/ftl_config.o src/ftl_config.o: ../src/ftl_config.c \
 ../src/request_transform.h:
 
 ../src/garbage_collection.h:
+
+../src/kv_store.h:
 
 ../src/t4nsc_ucode.h:
