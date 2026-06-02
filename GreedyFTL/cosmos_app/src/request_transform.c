@@ -75,7 +75,7 @@ void InitDependencyTable()
 	}
 }
 
-static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int cmdCode, unsigned int customCompletion, unsigned int completionSpecific)
+static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int cmdCode, unsigned int autoCompletion, unsigned int completionSpecific)
 {
 	unsigned int reqSlotTag, requestedNvmeBlock, tempNumOfNvmeBlock, transCounter, tempLsa, loop, nvmeBlockOffset, nvmeDmaStartIndex, reqCode;
 
@@ -108,7 +108,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.startIndex = nvmeDmaStartIndex;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
-	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion = customCompletion;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion = autoCompletion;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
 
 	PutToSliceReqQ(reqSlotTag);
@@ -132,7 +132,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.startIndex = nvmeDmaStartIndex;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
-		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion = customCompletion;
+		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion = autoCompletion;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
 
 		PutToSliceReqQ(reqSlotTag);
@@ -157,7 +157,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.startIndex = nvmeDmaStartIndex;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
-	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion = customCompletion;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion = autoCompletion;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
 
 	PutToSliceReqQ(reqSlotTag);
@@ -588,6 +588,7 @@ void ReleaseBlockedByRowAddrDepReq(unsigned int chNo, unsigned int wayNo)
 }
 
 
+// change: always autoCompletion ON -> check requset
 void IssueNvmeDmaReq(unsigned int reqSlotTag)
 {
 	unsigned int devAddr, dmaIndex, numOfNvmeBlock;
@@ -600,7 +601,8 @@ void IssueNvmeDmaReq(unsigned int reqSlotTag)
 	{
 		while(numOfNvmeBlock < reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock)
 		{
-				set_auto_rx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion);
+			// now check auto CQ or not
+			set_auto_rx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion);
 
 			numOfNvmeBlock++;
 			dmaIndex++;
@@ -613,7 +615,8 @@ void IssueNvmeDmaReq(unsigned int reqSlotTag)
 	{
 		while(numOfNvmeBlock < reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock)
 		{
-				set_auto_tx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion);
+			// now check auto CQ or not
+			set_auto_tx_dma(reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag, dmaIndex, devAddr, reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion);
 
 			numOfNvmeBlock++;
 			dmaIndex++;
@@ -626,11 +629,12 @@ void IssueNvmeDmaReq(unsigned int reqSlotTag)
 		assert(!"[WARNING] Not supported reqCode [WARNING]");
 }
 
+// If KV req, Need to write value length in CQ, so put CQ by hand.
 void CheckDoneNvmeDmaReq()
 {
 	unsigned int reqSlotTag, prevReq;
 	unsigned int rxDone, txDone;
-	unsigned int cmdSlotTag, completionSpecific, customCompletion;
+	unsigned int cmdSlotTag, completionSpecific, autoCompletion;
 
 	reqSlotTag = nvmeDmaReqQ.tailReq;
 	rxDone = 0;
@@ -645,30 +649,34 @@ void CheckDoneNvmeDmaReq()
 			if(!rxDone)
 				rxDone = check_auto_rx_dma_partial_done(reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.reqTail , reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.overFlowCnt);
 
-				if(rxDone)
-				{
-					cmdSlotTag = reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag;
-					completionSpecific = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific;
-					customCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion;
-					SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
-					if(customCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
-						set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
-				}
+			if(rxDone)
+			{
+				// copy before free request.
+				cmdSlotTag = reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag;
+				completionSpecific = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific;
+				autoCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion;
+				SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
+				// Need to Put request on CQ by hand.
+				if(autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
+					set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
+			}
 		}
 		else
 		{
 			if(!txDone)
 				txDone = check_auto_tx_dma_partial_done(reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.reqTail , reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.overFlowCnt);
 
-				if(txDone)
-				{
-					cmdSlotTag = reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag;
-					completionSpecific = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific;
-					customCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.customCompletion;
-					SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
-					if(customCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
-						set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
-				}
+			if(txDone)
+			{
+				// copy before free request.
+				cmdSlotTag = reqPoolPtr->reqPool[reqSlotTag].nvmeCmdSlotTag;
+				completionSpecific = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific;
+				autoCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion;
+				SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
+				// Need to Put request on CQ by hand.
+				if(autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
+					set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
+			}
 		}
 
 		reqSlotTag = prevReq;
