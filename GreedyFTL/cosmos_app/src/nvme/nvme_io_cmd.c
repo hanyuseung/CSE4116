@@ -138,6 +138,7 @@ static void complete_nvme_kv_error(unsigned int cmdSlotTag, unsigned int statusC
 	nvmeCPL.dword[0] = 0;
 	nvmeCPL.statusField.SCT = statusCodeType;
 	nvmeCPL.statusField.SC = statusCode;
+	nvmeCPL.specific = 0;
 	set_auto_nvme_cpl(cmdSlotTag, nvmeCPL.specific, nvmeCPL.statusFieldWord);
 }
 
