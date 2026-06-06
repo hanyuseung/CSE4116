@@ -1,6 +1,6 @@
 #include "nvme_passthru.h"
+#include <algorithm>
 #include <vector>
-#include <unordered_map>
 #include <random>
 #include <cstring>
 #include <iostream>
@@ -24,6 +24,11 @@ int main(int argc, char** argv) {
     uint32_t keyspace  = (argc > 3) ? std::stoul(argv[3]) : 4096;
     int nsid           = (argc > 4) ? std::stoi(argv[4]) : 1;
 
+    if (keyspace == 0) {
+        std::cerr << "keyspace must be greater than zero\n";
+        return 1;
+    }
+
     Proj3 kv;
     if (kv.Open(dev, nsid) != 0) {
         std::cerr << "Cannot open " << dev << "\n";
@@ -33,11 +38,12 @@ int main(int argc, char** argv) {
     std::mt19937 rng(1234567);
     std::uniform_int_distribution<uint32_t> dist(0, keyspace - 1);
 
-    std::unordered_map<uint32_t, std::string> latest; 
-
-    std::vector<uint8_t> val_buf(PAGE_SIZE); // value size is fixed (4KB), do not modify
+    std::vector<uint8_t> latest_pattern(keyspace, 0);
+    std::vector<uint8_t> key_seen(keyspace, 0);
+    std::string val(PAGE_SIZE, '\0'); // value size is fixed (4KB), do not modify
 
     size_t ok = 0, fail = 0;
+    size_t unique_keys = 0;
     size_t no_such_key_cnt = 0;
 
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -47,7 +53,7 @@ int main(int argc, char** argv) {
         uint32_t key = dist(rng);
 
         uint8_t p = pattern_for(key, i);
-        std::string val(val_buf.size(), char(p));
+        std::fill(val.begin(), val.end(), char(p));
 
         char key_str[KEY_SIZE + 1]; // key size is fixed (4B), do not modify
         memcpy(key_str, &key, KEY_SIZE);
@@ -60,7 +66,11 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        latest[key] = val;
+        if (!key_seen[key]) {
+            key_seen[key] = 1;
+            unique_keys++;
+        }
+        latest_pattern[key] = p;
     }
 
     // (2) `No such key` test
@@ -83,9 +93,9 @@ int main(int argc, char** argv) {
     }
 
     // (3) Random GETs
-    for (const auto &kvp : latest) {
-        uint32_t key = kvp.first;
-        const std::string &exp = kvp.second;
+    for (uint32_t key = 0; key < keyspace; key++) {
+        if (!key_seen[key])
+            continue;
 
         char key_str[KEY_SIZE + 1];
         memcpy(key_str, &key, KEY_SIZE);
@@ -100,12 +110,15 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        if (out.size() != exp.size()) {
+        if (out.size() != PAGE_SIZE) {
             fail++;
             continue;
         }
 
-        if (memcmp(out.data(), exp.data(), exp.size()) == 0) {
+        uint8_t exp = latest_pattern[key];
+        if (std::all_of(out.begin(), out.end(), [exp](char c) {
+            return static_cast<uint8_t>(c) == exp;
+        })) {
             ok++;
         } else {
             fail++;
@@ -119,6 +132,7 @@ int main(int argc, char** argv) {
     std::cout << " Cosmos+ OpenSSD-Based KV-SSD Benchmark \n";
     std::cout << "-----------------------------------------------\n";
     std::cout << " ops=" << ops << " keyspace=" << keyspace << "\n";
+    std::cout << " unique_keys=" << unique_keys << "\n";
     std::cout << " result: OK=" << ok << " FAIL=" << fail
               << " NO-SUCH-KEY=" << no_such_key_cnt << "\n";
     std::cout << " elapsed: " << ms << " ms  ("
@@ -127,4 +141,3 @@ int main(int argc, char** argv) {
 
     return (fail == 0) ? 0 : 5;
 }
-

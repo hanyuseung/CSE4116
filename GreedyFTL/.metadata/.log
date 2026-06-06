@@ -4151,3 +4151,55 @@ Command-line arguments:  -os linux -ws gtk -arch x86_64 -application com.xilinx.
 
 !ENTRY org.eclipse.core.resources 2 10035 2026-06-04 13:33:48.431
 !MESSAGE The workspace will exit with unsaved changes in this session.
+!SESSION 2026-06-06 17:37:37.591 -----------------------------------------------
+eclipse.buildId=2019.1
+java.version=1.8.0_112
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=ko_KR
+Framework arguments:  -application com.xilinx.sdk.cmdline.service 33063
+Command-line arguments:  -os linux -ws gtk -arch x86_64 -application com.xilinx.sdk.cmdline.service 33063 -data /home/embe2024/workspace/GreedyFTL
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 17:37:38.568
+!MESSAGE The workspace exited with unsaved changes in the previous session; refreshing workspace to recover changes.
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 17:37:44.339
+!MESSAGE The workspace will exit with unsaved changes in this session.
+!SESSION 2026-06-06 17:55:41.934 -----------------------------------------------
+eclipse.buildId=2019.1
+java.version=1.8.0_112
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=ko_KR
+Framework arguments:  -application com.xilinx.sdk.cmdline.service 44705
+Command-line arguments:  -os linux -ws gtk -arch x86_64 -application com.xilinx.sdk.cmdline.service 44705 -data /home/embe2024/workspace/GreedyFTL
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 17:55:42.770
+!MESSAGE The workspace exited with unsaved changes in the previous session; refreshing workspace to recover changes.
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 17:55:48.902
+!MESSAGE The workspace will exit with unsaved changes in this session.
+!SESSION 2026-06-06 17:56:59.718 -----------------------------------------------
+eclipse.buildId=2019.1
+java.version=1.8.0_112
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=ko_KR
+Framework arguments:  -application com.xilinx.sdk.cmdline.service 45979
+Command-line arguments:  -os linux -ws gtk -arch x86_64 -application com.xilinx.sdk.cmdline.service 45979 -data /home/embe2024/workspace/GreedyFTL
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 17:57:00.520
+!MESSAGE The workspace exited with unsaved changes in the previous session; refreshing workspace to recover changes.
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 17:57:06.281
+!MESSAGE The workspace will exit with unsaved changes in this session.
+!SESSION 2026-06-06 18:24:35.916 -----------------------------------------------
+eclipse.buildId=2019.1
+java.version=1.8.0_112
+java.vendor=Oracle Corporation
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=ko_KR
+Framework arguments:  -application com.xilinx.sdk.cmdline.service 45237
+Command-line arguments:  -os linux -ws gtk -arch x86_64 -application com.xilinx.sdk.cmdline.service 45237 -data /home/embe2024/workspace/GreedyFTL
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 18:24:36.975
+!MESSAGE The workspace exited with unsaved changes in the previous session; refreshing workspace to recover changes.
+
+!ENTRY org.eclipse.core.resources 2 10035 2026-06-06 18:24:43.017
+!MESSAGE The workspace will exit with unsaved changes in this session.

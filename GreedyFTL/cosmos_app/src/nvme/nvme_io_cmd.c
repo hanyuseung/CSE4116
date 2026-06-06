@@ -144,37 +144,36 @@ static void complete_nvme_kv_error(unsigned int cmdSlotTag, unsigned int statusC
 
 void handle_nvme_kv_put(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
 {
-	unsigned int key, logicalSliceAddr, nlb, valueLength;
+	unsigned int key, startLba, nlb, valueLength, kvStatus;
 
 	key = nvmeIOCmd->dword[10];
 	nlb = nvmeIOCmd->dword[12];
 	valueLength = nvmeIOCmd->dword[13];
 
-	if((nlb != 0) || (valueLength == 0) || (valueLength > BYTES_PER_NVME_BLOCK))
+	if(nlb >= MAX_NUM_OF_NLB)
 	{
 		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_INVALID_FIELD_IN_COMMAND);
 		return;
 	}
 
-	logicalSliceAddr = AllocateKvLogicalSlice();
-	if(logicalSliceAddr == KV_LSA_NONE)
+	kvStatus = KvFtlPut(key, nlb, valueLength, &startLba);
+	if(kvStatus == KV_FTL_INVALID_VALUE)
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_INVALID_FIELD_IN_COMMAND);
+		return;
+	}
+	else if(kvStatus != KV_FTL_SUCCESS)
 	{
 		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_CAPACITY_EXCEEDED);
 		return;
 	}
 
-	if(!PutKvIndexEntry(key, logicalSliceAddr, valueLength))
-	{
-		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_CAPACITY_EXCEEDED);
-		return;
-	}
-
-	ReqTransNvmeToSlice(cmdSlotTag, logicalSliceAddr * NVME_BLOCKS_PER_SLICE, nlb, IO_NVM_WRITE);
+	ReqTransNvmeToSlice(cmdSlotTag, startLba, nlb, IO_NVM_WRITE);
 }
 
 void handle_nvme_kv_get(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
 {
-	unsigned int key, logicalSliceAddr, valueLength;
+	unsigned int key, startLba, valueLength, readNlb;
 
 	key = nvmeIOCmd->dword[10];
 	if(nvmeIOCmd->dword[12] >= MAX_NUM_OF_NLB)
@@ -183,13 +182,26 @@ void handle_nvme_kv_get(unsigned int cmdSlotTag, NVME_IO_COMMAND *nvmeIOCmd)
 		return;
 	}
 
-	if(!FindKvIndexEntry(key, &logicalSliceAddr, &valueLength))
+	if(!FindKvIndexEntry(key, &startLba, &valueLength))
 	{
 		complete_nvme_kv_error(cmdSlotTag, SCT_VENDOR_SPECIFIC, SC_KV_KEY_NOT_EXIST);
 		return;
 	}
 
-	ReqTransKvGetToSlice(cmdSlotTag, logicalSliceAddr * NVME_BLOCKS_PER_SLICE, nvmeIOCmd->dword[12], valueLength);
+	if(valueLength == 0)
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_INTERNAL_DEVICE_ERROR);
+		return;
+	}
+
+	readNlb = KvFtlBlockCountFromLength(valueLength) - 1;
+	if(readNlb > nvmeIOCmd->dword[12])
+	{
+		complete_nvme_kv_error(cmdSlotTag, SCT_GENERIC_COMMAND_STATUS, SC_INVALID_FIELD_IN_COMMAND);
+		return;
+	}
+
+	ReqTransKvGetToSlice(cmdSlotTag, startLba, readNlb, valueLength);
 }
 
 

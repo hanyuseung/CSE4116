@@ -78,12 +78,15 @@ void InitDependencyTable()
 static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned int startLba, unsigned int nlb, unsigned int cmdCode, unsigned int autoCompletion, unsigned int completionSpecific)
 {
 	unsigned int reqSlotTag, requestedNvmeBlock, tempNumOfNvmeBlock, transCounter, tempLsa, loop, nvmeBlockOffset, nvmeDmaStartIndex, reqCode;
+	unsigned int lastNvmeBlockCount, hasLastTransform, firstTransformIsLast, completionForReq;
 
 	requestedNvmeBlock = nlb + 1;
 	transCounter = 0;
 	nvmeDmaStartIndex = 0;
 	tempLsa = startLba / NVME_BLOCKS_PER_SLICE;
 	loop = ((startLba % NVME_BLOCKS_PER_SLICE) + requestedNvmeBlock) / NVME_BLOCKS_PER_SLICE;
+	lastNvmeBlockCount = (startLba + requestedNvmeBlock) % NVME_BLOCKS_PER_SLICE;
+	hasLastTransform = ((lastNvmeBlockCount != 0) && (loop != 0));
 
 	if(cmdCode == IO_NVM_WRITE)
 		reqCode = REQ_CODE_WRITE;
@@ -98,6 +101,8 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 		tempNumOfNvmeBlock = NVME_BLOCKS_PER_SLICE - nvmeBlockOffset;
 	else
 		tempNumOfNvmeBlock = requestedNvmeBlock;
+	firstTransformIsLast = ((loop == 0) || ((loop == 1) && !hasLastTransform));
+	completionForReq = ((autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF) && !firstTransformIsLast) ? NVME_MANUAL_COMPLETION_NONE : completionSpecific;
 
 	reqSlotTag = GetFromFreeReqQ();
 
@@ -109,7 +114,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
 	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion = autoCompletion;
-	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
+	reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionForReq;
 
 	PutToSliceReqQ(reqSlotTag);
 
@@ -124,6 +129,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 		tempNumOfNvmeBlock = NVME_BLOCKS_PER_SLICE;
 
 		reqSlotTag = GetFromFreeReqQ();
+		completionForReq = ((autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF) && (((transCounter + 1) != loop) || hasLastTransform)) ? NVME_MANUAL_COMPLETION_NONE : completionSpecific;
 
 		reqPoolPtr->reqPool[reqSlotTag].reqType = REQ_TYPE_SLICE;
 		reqPoolPtr->reqPool[reqSlotTag].reqCode = reqCode;
@@ -133,7 +139,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.nvmeBlockOffset = nvmeBlockOffset;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.numOfNvmeBlock = tempNumOfNvmeBlock;
 		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion = autoCompletion;
-		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionSpecific;
+		reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.completionSpecific = completionForReq;
 
 		PutToSliceReqQ(reqSlotTag);
 
@@ -144,7 +150,7 @@ static void ReqTransNvmeToSliceWithCompletion(unsigned int cmdSlotTag, unsigned 
 
 	//last transform
 	nvmeBlockOffset = 0;
-	tempNumOfNvmeBlock = (startLba + requestedNvmeBlock) % NVME_BLOCKS_PER_SLICE;
+	tempNumOfNvmeBlock = lastNvmeBlockCount;
 	if((tempNumOfNvmeBlock == 0) || (loop == 0))
 		return ;
 
@@ -657,7 +663,7 @@ void CheckDoneNvmeDmaReq()
 				autoCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion;
 				SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
 				// Need to Put request on CQ by hand.
-				if(autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
+				if((autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF) && (completionSpecific != NVME_MANUAL_COMPLETION_NONE))
 					set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
 			}
 		}
@@ -674,7 +680,7 @@ void CheckDoneNvmeDmaReq()
 				autoCompletion = reqPoolPtr->reqPool[reqSlotTag].nvmeDmaInfo.autoCompletion;
 				SelectiveGetFromNvmeDmaReqQ(reqSlotTag);
 				// Need to Put request on CQ by hand.
-				if(autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF)
+				if((autoCompletion == NVME_COMMAND_AUTO_COMPLETION_OFF) && (completionSpecific != NVME_MANUAL_COMPLETION_NONE))
 					set_auto_nvme_cpl(cmdSlotTag, completionSpecific, 0);
 			}
 		}
@@ -682,5 +688,3 @@ void CheckDoneNvmeDmaReq()
 		reqSlotTag = prevReq;
 	}
 }
-
-

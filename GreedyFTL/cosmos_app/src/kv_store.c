@@ -4,7 +4,7 @@
 
 P_KV_INDEX kvIndexPtr;
 
-static unsigned int nextKvLogicalSlice;
+static unsigned int nextKvLba;
 
 static unsigned int HashKvKey(unsigned int key)
 {
@@ -16,36 +16,52 @@ void InitKvStore()
 	unsigned int entry;
 
 	kvIndexPtr = (P_KV_INDEX)KV_INDEX_ADDR;
-	nextKvLogicalSlice = 0;
+	nextKvLba = 0;
 
 	for(entry = 0; entry < KV_INDEX_ENTRY_COUNT; entry++)
-		kvIndexPtr->entry[entry].logicalSliceAddr = KV_LSA_NONE;
+		kvIndexPtr->entry[entry].startLba = KV_LBA_NONE;
 }
 
-unsigned int AllocateKvLogicalSlice()
+unsigned int KvFtlBlockCountFromLength(unsigned int valueLength)
 {
-	unsigned int logicalSliceCapacity;
+	if(valueLength == 0)
+		return 0;
 
-	logicalSliceCapacity = storageCapacity_L / NVME_BLOCKS_PER_SLICE;
-	if(nextKvLogicalSlice >= logicalSliceCapacity)
-		return KV_LSA_NONE;
-
-	return nextKvLogicalSlice++;
+	return ((valueLength - 1) / BYTES_PER_NVME_BLOCK) + 1;
 }
 
-unsigned int FindKvIndexEntry(unsigned int key, unsigned int *logicalSliceAddr, unsigned int *valueLength)
+unsigned int AllocateKvBlockRange(unsigned int blockCount)
+{
+	unsigned int allocatedLba;
+
+	if(blockCount == 0)
+		return KV_LBA_NONE;
+
+	if(nextKvLba > storageCapacity_L)
+		return KV_LBA_NONE;
+
+	if(blockCount > (storageCapacity_L - nextKvLba))
+		return KV_LBA_NONE;
+
+	allocatedLba = nextKvLba;
+	nextKvLba += blockCount;
+
+	return allocatedLba;
+}
+
+unsigned int FindKvIndexEntry(unsigned int key, unsigned int *startLba, unsigned int *valueLength)
 {
 	unsigned int entry, probe;
 
 	entry = HashKvKey(key);
 	for(probe = 0; probe < KV_INDEX_ENTRY_COUNT; probe++)
 	{
-		if(kvIndexPtr->entry[entry].logicalSliceAddr == KV_LSA_NONE)
+		if(kvIndexPtr->entry[entry].startLba == KV_LBA_NONE)
 			return 0;
 
 		if(kvIndexPtr->entry[entry].key == key)
 		{
-			*logicalSliceAddr = kvIndexPtr->entry[entry].logicalSliceAddr;
+			*startLba = kvIndexPtr->entry[entry].startLba;
 			*valueLength = kvIndexPtr->entry[entry].valueLength;
 			return 1;
 		}
@@ -56,18 +72,18 @@ unsigned int FindKvIndexEntry(unsigned int key, unsigned int *logicalSliceAddr, 
 	return 0;
 }
 
-unsigned int PutKvIndexEntry(unsigned int key, unsigned int logicalSliceAddr, unsigned int valueLength)
+unsigned int PutKvIndexEntry(unsigned int key, unsigned int startLba, unsigned int valueLength)
 {
 	unsigned int entry, probe;
 
 	entry = HashKvKey(key);
 	for(probe = 0; probe < KV_INDEX_ENTRY_COUNT; probe++)
 	{
-		if((kvIndexPtr->entry[entry].logicalSliceAddr == KV_LSA_NONE) ||
+		if((kvIndexPtr->entry[entry].startLba == KV_LBA_NONE) ||
 		   (kvIndexPtr->entry[entry].key == key))
 		{
 			kvIndexPtr->entry[entry].key = key;
-			kvIndexPtr->entry[entry].logicalSliceAddr = logicalSliceAddr;
+			kvIndexPtr->entry[entry].startLba = startLba;
 			kvIndexPtr->entry[entry].valueLength = valueLength;
 			return 1;
 		}
@@ -76,4 +92,53 @@ unsigned int PutKvIndexEntry(unsigned int key, unsigned int logicalSliceAddr, un
 	}
 
 	return 0;
+}
+
+unsigned int KvFtlPut(unsigned int key, unsigned int nlb, unsigned int valueLength, unsigned int *startLba)
+{
+	unsigned int allocatedLba;
+	unsigned int blockCount;
+	unsigned int oldBlockCount;
+	unsigned int oldStartLba;
+	unsigned int oldValueLength;
+	unsigned int maxValueLength;
+
+	blockCount = nlb + 1;
+	if(blockCount == 0)
+		return KV_FTL_INVALID_VALUE;
+
+	maxValueLength = blockCount * BYTES_PER_NVME_BLOCK;
+	if(valueLength == 0)
+		valueLength = maxValueLength;
+	else if(valueLength > maxValueLength)
+		return KV_FTL_INVALID_VALUE;
+
+	if(FindKvIndexEntry(key, &oldStartLba, &oldValueLength))
+	{
+		oldBlockCount = KvFtlBlockCountFromLength(oldValueLength);
+		if(blockCount <= oldBlockCount)
+		{
+			if(!PutKvIndexEntry(key, oldStartLba, valueLength))
+				return KV_FTL_CAPACITY_FULL;
+
+			*startLba = oldStartLba;
+			return KV_FTL_SUCCESS;
+		}
+	}
+
+	allocatedLba = AllocateKvBlockRange(blockCount);
+	if(allocatedLba == KV_LBA_NONE)
+		return KV_FTL_CAPACITY_FULL;
+
+	if(!PutKvIndexEntry(key, allocatedLba, valueLength))
+	{
+		if((allocatedLba + blockCount) == nextKvLba)
+			nextKvLba = allocatedLba;
+
+		return KV_FTL_CAPACITY_FULL;
+	}
+
+	*startLba = allocatedLba;
+
+	return KV_FTL_SUCCESS;
 }
