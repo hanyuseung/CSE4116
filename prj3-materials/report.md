@@ -1,286 +1,175 @@
-# Project 3 Report: Key-Value Interface Enablement and KV-SSD Firmware Implementation
+# Task1 – Key-Value Interface 개통 및 KV-SSD 펌웨어 개발
 
-## 1. 프로젝트 개요 및 목표
+## 1. NVMe KV I/O Command와 기존 Block I/O Command의 차이, 그리고 새 Storage Abstraction이 호스트 소프트웨어 스택에 미치는 영향
 
-본 프로젝트의 목표는 Cosmos+ OpenSSD의 기존 block 기반 GreedyFTL 펌웨어에 Key-Value SSD 인터페이스를 추가하는 것이다. 기존 NVMe block I/O는 Logical Block Address(LBA)를 기준으로 데이터를 읽고 쓰지만, KV-SSD에서는 host가 직접 정의한 key를 기준으로 value를 저장하고 검색한다.
+### 1.1 Command 구조의 차이
 
-본 구현은 제공된 `kv_bench` host benchmark가 발행하는 NVMe passthrough 기반 KV-PUT, KV-GET 명령을 처리하도록 펌웨어를 확장하였다. 최소 기능 목표는 다음과 같다.
+기존 NVMe Block I/O Command(Read `0x02`, Write `0x01`)는 host가 데이터의 위치(Logical Block Address)를 직접 지정한다. 반면 본 프로젝트에서 새로 정의한 KV I/O Command는 위치 대신 key를 전달하며, 데이터가 저장될 위치의 결정은 전적으로 SSD 펌웨어 내부로 위임된다. 두 command의 SQE(Submission Queue Entry) 필드 사용을 비교하면 다음과 같다.
 
-- KV-PUT command를 해석하여 value를 SSD 내부 logical address space에 저장한다.
-- KV-GET command를 해석하여 해당 key의 최신 value를 반환한다.
-- 동일 key에 여러 번 PUT이 발생하면 latest-write-wins semantics를 보장한다.
-- 존재하지 않는 key에 대한 GET은 host가 인식 가능한 `No such key` 상태로 완료한다.
-- 기존 GreedyFTL의 LSA-to-VSA 변환, NAND 접근, data buffer, DMA request pipeline을 최대한 재사용한다.
+| 필드 | Block Write/Read (`0x01`/`0x02`) | KV-PUT (`0xA0`) / KV-GET (`0xA1`) |
+| --- | --- | --- |
+| OPC | `0x01` (Write), `0x02` (Read) | `0xA0` (PUT), `0xA1` (GET) |
+| CDW10–11 | Starting LBA (64-bit) | **4-byte key** (CDW10) |
+| CDW12 | NLB (zero-based block 수) | NLB (zero-based block 수) |
+| CDW13 | (DSM 등) | **value 길이 (bytes)** |
+| PRP | data buffer | PUT value / GET 결과 buffer |
+| Completion DW0 | 사용 안 함 | **GET 시 실제 value 길이 반환** |
 
-## 2. KV-PUT, KV-GET Command 형식
+구조적으로 가장 큰 차이는 두 가지다.
 
-Host benchmark는 `prj3-host-evaluation/nvme_passthru.cc`에서 Linux `NVME_IOCTL_IO_CMD` ioctl을 사용하여 NVMe passthrough command를 발행한다. 본 프로젝트에서 사용하는 command 형식은 다음과 같다.
+1. **주소 필드의 의미 변화**: Block command의 SLBA 자리에는 host가 계산한 "위치"가 들어가지만, KV command의 CDW10에는 host application이 정의한 "이름(key)"이 들어간다. 즉 *name-to-location translation*이 host에서 device로 이동한다.
+2. **Completion의 의미 변화**: Block read는 host가 요청한 길이를 그대로 돌려받으므로 completion entry의 DW0가 불필요하다. 반면 KV-GET은 host가 value의 실제 길이를 모르는 상태로 요청하므로, device가 completion DW0(specific 필드)에 value 길이를 실어 반환해야 한다. 또한 존재하지 않는 key에 대해서는 vendor-specific status (`SCT=0x7`, `SC=0xC1`)로 "No such key"를 알린다. 이는 block 인터페이스에는 존재하지 않는 의미론이다.
 
-| 필드 | 의미 |
-| --- | --- |
-| `OPC = 0xA0` | KV-PUT |
-| `OPC = 0xA1` | KV-GET |
-| `CDW10` | 4-byte key |
-| `CDW12` | zero-based NLB |
-| `CDW13` | value byte length |
-| PRP buffer | PUT value 또는 GET result buffer |
+> [시각자료: Block I/O와 KV I/O의 SQE dword 배치를 좌우로 나란히 그린 비교 그림. 왼쪽 Block command는 CDW10–11에 SLBA, CDW12에 NLB가 들어가고, 오른쪽 KV command는 CDW10에 key, CDW12에 NLB, CDW13에 value length가 들어가는 것을 같은 dword 위치에 색으로 대응시켜 표현. 아래쪽에는 completion entry(CQE)도 함께 그려 KV-GET에서만 DW0에 valueLength가 채워짐을 강조하면 좋음.]
 
-Host의 PUT value는 benchmark 기준 4 KiB로 고정되어 있다. GET buffer는 최대 16 KiB로 할당되며, device는 completion `DW0`에 실제 value length를 반환한다. Host는 completion result 값을 기준으로 buffer에서 value를 추출한다.
+### 1.2 주소 변환 경로의 차이
 
-## 3. 기존 Block I/O와 KV Command의 차이
-
-기존 block I/O는 host가 LBA를 직접 지정한다.
+Block 인터페이스에서는 mapping 관리의 책임이 host에 있다.
 
 ```text
-Host block write/read
-  -> LBA
-  -> GreedyFTL LSA/VSA translation
-  -> NAND physical location
+[Block I/O]
+App → File System / DB index → Block Layer → NVMe Driver
+    → (host가 결정한 LBA) → SSD: LSA → VSA → NAND physical
 ```
 
-반면 KV command에서는 host가 LBA를 제공하지 않는다. Host는 key만 전달하고, firmware가 key에 대응하는 최신 logical location을 관리한다.
+KV 인터페이스에서는 key→위치 변환 단계가 SSD 내부에 추가되고, host는 위치를 전혀 알지 못한다.
 
 ```text
-Host KV-PUT/KV-GET
-  -> key
-  -> KV index lookup/update
-  -> LSA
-  -> GreedyFTL LSA/VSA translation
-  -> NAND physical location
+[KV I/O]
+App → KV API (NVMe passthrough ioctl)
+    → (key) → SSD: KV index (key → LBA) → LSA → VSA → NAND physical
 ```
 
-이 차이로 인해 host software stack은 파일 시스템 또는 DB 내부 index를 통해 block 위치를 직접 관리할 필요가 줄어든다. Key lookup과 value location 관리 일부가 SSD firmware 내부로 이동하므로, host는 key-value operation이라는 더 높은 수준의 storage abstraction을 사용할 수 있다.
+> [시각자료: 위 두 경로를 하나의 그림에 상하 또는 좌우로 배치한 host–device 계층도. Host 영역(Application, File System/DB index, Block layer/Driver)과 Device 영역(KV index, LSA→VSA 변환, NAND)을 박스로 구분하고, "key→LBA mapping 관리 주체"가 Block I/O에서는 host 쪽 박스에, KV I/O에서는 device 쪽 박스에 있음을 화살표와 색상으로 대비시키는 그림이 적합함.]
 
-## 4. KV Index 설계
+### 1.3 호스트 소프트웨어 스택에 미치는 영향
 
-### 4.1 Index 구조
+이러한 storage abstraction의 변화는 host 스택에 다음과 같은 영향을 준다.
 
-본 구현은 DRAM에 정적으로 배치한 in-memory hash table을 KV index로 사용한다.
+- **Indexing 계층의 오프로드**: 기존에는 file system의 extent/inode 관리나 KV DB(LSM-tree 등)의 인덱스가 "key → 파일 offset → LBA" 변환을 수행했다. KV-SSD에서는 이 변환의 마지막 단계가 device로 내려가므로, host의 software indexing 계층을 얇게 만들거나 생략할 수 있고, 그만큼 host CPU/DRAM 자원과 I/O amplification이 줄어든다.
+- **Block layer 우회**: 표준 block 인터페이스를 따르지 않으므로 기존 file system, page cache, block scheduler를 그대로 사용할 수 없다. 본 프로젝트의 host benchmark도 `NVME_IOCTL_IO_CMD` 기반 NVMe passthrough로 command를 직접 발행한다. 즉, KV 추상화의 이점을 얻는 대신 host는 새로운 KV 전용 API/드라이버 경로를 필요로 한다.
+- **오류 의미론의 확장**: host는 "No such key"라는 존재 여부 의미론과, completion DW0를 통한 가변 길이 반환을 처리해야 한다. 이는 단순한 sector 입출력보다 풍부한 계약(contract)이며, application 입장에서는 GET/PUT만으로 object storage처럼 사용할 수 있게 된다.
+- **일관성 책임의 이동**: 동일 key에 대한 latest-write-wins 보장이 device의 책임이 되므로, host는 자체적인 버전 관리 없이 최신 value 조회를 신뢰할 수 있다.
 
-```text
-key -> latest logical slice address (LSA), value length
-```
+## 2. KV-SSD 구현체의 Index 자료구조
 
-Entry 구조는 다음과 같다.
+### 2.1 채택한 구조: DRAM 상의 open-addressing hash table
+
+KV index는 `kv_store.h`에 선언된 정적 hash table로, device DRAM의 예약 영역(`memory_map.h`의 `RESERVED0_START_ADDR = 0x00300000`)에 배치하였다.
 
 ```c
+#define KV_INDEX_ENTRY_COUNT    (1 << 23)        // 8,388,608 entries
+#define KV_INDEX_ENTRY_MASK     (KV_INDEX_ENTRY_COUNT - 1)
+
 typedef struct _KV_INDEX_ENTRY {
-	unsigned int key;
-	unsigned int logicalSliceAddr;
-	unsigned int valueLength;
+    unsigned int key;            // host가 정의한 4-byte key
+    unsigned int startLba;       // 최신 value가 저장된 시작 LBA
+    unsigned int valueLength;    // 최신 value의 바이트 길이
 } KV_INDEX_ENTRY;
 ```
 
-Hash function은 32-bit key에 multiplicative hashing을 적용한 뒤 table mask를 사용한다. Collision은 linear probing으로 처리한다. `logicalSliceAddr == KV_LSA_NONE`이면 해당 entry는 비어 있는 것으로 간주한다.
+- **Hash function**: Knuth의 multiplicative hashing(`key * 2654435761`)에 table mask를 적용한다. 곱셈 한 번과 AND 한 번으로 계산되어 펌웨어 환경에서 매우 저렴하고, 순차적/편향된 key 입력도 table 전체에 고르게 분산시킨다.
+- **Collision 처리**: open addressing + linear probing. 충돌 시 다음 slot으로 한 칸씩 이동하며, 빈 entry는 `startLba == 0xFFFFFFFF`(`KV_LBA_NONE`)로 표시한다.
+- **크기**: entry당 12 bytes × 8,388,608개 = 96 MiB. 평가에서 요구되는 keyspace 4,194,304(2^22)를 기준으로 load factor가 최대 50%가 되도록 entry 수를 2^23으로 정하여, linear probing의 평균 probe 길이를 짧게 유지하였다.
 
-### 4.2 DRAM 배치
+> [시각자료: hash table 동작을 보여주는 그림. 세로로 길게 그린 entry 배열(0 ~ 8,388,607)에 대해, ① key가 multiplicative hash를 거쳐 특정 index로 매핑되는 화살표, ② 해당 slot이 차 있을 때 linear probing으로 아래 칸으로 이동하는 화살표, ③ entry 내부 3개 필드(key, startLba, valueLength)의 확대도, ④ 빈 slot은 startLba=0xFFFFFFFF로 표시됨을 함께 그리면 좋음. DRAM memory map에서 KV index가 RESERVED0 영역(96 MiB)을 차지함을 보여주는 작은 배치도를 곁들이면 더 좋음.]
 
-KV index는 `memory_map.h`에 정의한 reserved DRAM 영역에 배치한다.
+### 2.2 선정 이유
 
-```text
-KV_INDEX_ADDR = RESERVED0_START_ADDR
-```
+- **평균 O(1) 연산**: benchmark workload는 균등 random key에 대한 PUT/GET이므로, hash table이 평균 상수 시간 lookup/insert를 제공한다. 10,000,000회 연산 규모에서 tree 계열(O(log n))보다 유리하다.
+- **고정 크기 key에 최적**: key가 4 bytes 고정이므로 가변 길이 key 비교나 별도 key 저장 공간이 필요 없고, entry가 12 bytes로 단순해진다.
+- **펌웨어 환경 적합성**: 동적 메모리 할당 없이 부팅 시 정적 영역에 한 번 배치하면 되고, 포인터 추적이 없어 디버깅이 쉽다. Cosmos+ 보드의 1 GiB DRAM 중 96 MiB는 충분히 감당 가능한 크기다.
+- **Persistence 불요**: 본 과제의 평가 시나리오는 reset 이후 데이터 유지가 요구되지 않으므로, NAND-backed 구조(B+-tree, LSM 등) 대신 in-memory 구조로 충분하다.
 
-현재 table entry 수는 `8,388,608`개이고, entry당 크기는 12 bytes이다. 따라서 KV index의 전체 크기는 약 96 MiB이다.
+### 2.3 장단점
 
-```text
-8,388,608 entries * 12 bytes = 100,663,296 bytes ~= 96 MiB
-```
+장점:
 
-이 크기는 hidden evaluation에서 사용될 수 있는 큰 keyspace와 random workload를 고려한 선택이다. Open addressing table의 load factor를 낮게 유지하여 lookup과 insert의 probing 비용을 줄이는 것이 목적이다.
+- 평균 O(1)의 빠른 lookup/insert, 구현과 검증이 단순함.
+- 메모리 배치가 정적·연속적이라 cache 동작과 디버깅에 유리함.
+- load factor 50% 이하로 설계하여 probing 비용이 안정적임.
 
-### 4.3 선택 이유
+단점:
 
-Hash table을 선택한 이유는 다음과 같다.
+- DRAM에만 존재하므로 reset 시 index가 소실됨 (persistence 없음).
+- entry 수가 컴파일 시 고정되어 keyspace가 table 크기에 근접하면 probing이 급격히 길어지고, 초과하면 PUT이 실패함 (resize 불가).
+- 삭제(DELETE) 연산을 고려하지 않은 설계이며, 삭제를 지원하려면 tombstone 처리가 추가로 필요함.
+- range query, 순회 등 정렬 기반 연산을 지원할 수 없음 (hash 구조의 본질적 한계).
 
-- Random key workload에서 평균 O(1) lookup/update를 기대할 수 있다.
-- 구현이 단순하여 firmware 환경에서 debugging이 쉽다.
-- benchmark는 reset 이후 persistence를 요구하지 않으므로 in-memory index로 충분하다.
-- Key 크기가 4 bytes로 고정되어 있어 entry 구조가 단순하다.
+## 3. KV-SSD 구현체의 Value 관리 기법
 
-단점은 다음과 같다.
+### 3.1 저장 (KV-PUT)
 
-- Firmware reset 이후 index가 복구되지 않는다.
-- DRAM 사용량이 크다.
-- Entry 삭제와 log cleaning을 지원하지 않는다.
-- Load factor가 높아지면 probing 비용이 증가한다.
-
-## 5. Value 관리 방식
-
-Value는 기존 GreedyFTL의 logical address space 위에 append-only 방식으로 저장한다. KV 계층은 physical NAND 주소 또는 VSA를 직접 관리하지 않는다. 대신 PUT마다 새로운 LSA를 할당하고, 기존 FTL이 `LSA -> VSA -> physical NAND` 변환을 처리하도록 한다.
+KV-PUT은 `nvme_io_cmd.c`의 `handle_nvme_kv_put()`에서 처리하며, 핵심 정책은 **NVMe block(4 KiB) 단위 할당 + 동일 key overwrite 시 기존 LBA 재활용**이다.
 
 ```text
-PUT key=K, value=V
-  -> append LSA 할당
-  -> key K의 index entry를 latest LSA로 갱신
-  -> 기존 FTL write pipeline으로 value 저장
+KV-PUT (OPC 0xA0)
+ 1. CDW10에서 key, CDW12에서 NLB, CDW13에서 value 길이 추출
+ 2. KvFtlPut() 호출:
+    a. 기존 entry가 있고 새 value가 기존 block 수 이하로 들어가면
+       → 기존 startLba를 그대로 재사용 (in-place overwrite)
+    b. 그 외에는 bump allocator(nextKvLba)로 새 LBA 구간 할당
+    c. hash index에 key → (startLba, valueLength) 갱신
+ 3. ReqTransNvmeToSlice()로 기존 GreedyFTL write pipeline에 전달
+    → slice request 생성 → data buffer 할당 → RX DMA로 host value 수신
+    → LSA→VSA 변환 → NAND program
 ```
 
-동일 key에 대한 overwrite는 기존 value를 직접 수정하지 않고 새 LSA에 append한다.
+초기 구현은 value 하나에 slice(16 KiB) 전체를 할당했기 때문에, benchmark의 4 KiB value 기준으로 PUT마다 12 KiB의 logical space 낭비가 있었다. 이를 NVMe block(4 KiB) 단위 할당으로 수정하여 낭비를 제거하였다. 또한 초기에는 동일 key 재-PUT 시에도 매번 새 LBA를 append하여 logical space가 단조 증가했는데, 새 value가 기존 자리에 들어가는 경우 기존 LBA 구간을 재사용하도록 개선하였다. 이 두 가지 개선이 없으면 10,000,000회 PUT 시 10M × 16 KiB ≈ 152.6 GiB의 logical space가 필요해 용량을 초과하지만, 개선 후에는 unique key 수만큼만(약 3.8M × 4 KiB ≈ 14.5 GiB) 소비된다.
+
+동일 key에 대한 latest-write-wins는 index가 항상 "가장 최근 PUT의 위치"만 가리키는 것으로 보장된다. 기존 자리를 재사용하는 경우 데이터 자체가 덮어써지고, 새 자리를 할당하는 경우 index가 새 LBA로 갱신되므로 이전 value는 더 이상 도달할 수 없다.
+
+### 3.2 검색 (KV-GET)
+
+KV-GET은 `handle_nvme_kv_get()`에서 처리한다.
 
 ```text
-PUT key=7, value=A -> key 7 maps to LSA 0
-PUT key=7, value=B -> key 7 maps to LSA 1
-GET key=7          -> LSA 1에서 value B 반환
+KV-GET (OPC 0xA1)
+ 1. CDW10에서 key 추출
+ 2. FindKvIndexEntry()로 hash lookup
+    - 실패 시: NAND 접근 없이 vendor-specific status
+      (SCT=0x7, SC=0xC1)로 즉시 completion → host는 ENOSUCHKEY로 해석
+ 3. 성공 시: ReqTransKvGetToSlice(startLba, readNlb, valueLength) 호출
+    → 기존 read pipeline 재사용 (LSA→VSA 변환, NAND read, TX DMA)
+ 4. TX DMA 완료 시 수동 completion으로 CQ DW0에 valueLength 기록
 ```
 
-이 방식은 구현이 단순하고 latest-write-wins semantics를 쉽게 보장할 수 있다. 반면 이전 value가 사용하던 LSA는 KV 계층에서 즉시 회수하지 않으므로, 장시간 실행 workload에서는 log cleaning 또는 compaction 정책이 필요하다.
-
-## 6. KV-PUT 처리 흐름
-
-KV-PUT은 `nvme_io_cmd.c`의 `handle_nvme_kv_put()`에서 처리한다.
+GET 경로에서 핵심적인 변경은 completion 처리다. 기존 block I/O는 DMA 발행 시 hardware auto-completion(`HOST_DMA_CMD_FIFO_REG`의 `autoCompletion` bit)을 켜서 DMA 완료와 동시에 hardware가 CQ entry를 자동 생성한다. 그러나 이 방식으로는 completion DW0에 value 길이를 실을 수 없다. 따라서 KV-GET request는 `NVME_DMA_INFO`에 추가한 `autoCompletion`/`completionSpecific` 필드를 통해 auto-completion을 끄고 value 길이를 request metadata에 보관하며, `CheckDoneNvmeDmaReq()`에서 TX DMA 완료를 확인한 뒤 `set_auto_nvme_cpl(cmdSlotTag, valueLength, 0)`로 수동 completion을 발행한다.
 
 ```text
-1. CDW10에서 key 추출
-2. CDW12에서 NLB 추출
-3. CDW13에서 value length 추출
-4. value size가 현재 지원 범위인지 확인
-5. AllocateKvLogicalSlice()로 append LSA 할당
-6. PutKvIndexEntry()로 key -> latest LSA, value length 갱신
-7. ReqTransNvmeToSlice()를 통해 기존 write pipeline으로 전달
+KV index의 valueLength
+  → reqPool.nvmeDmaInfo.completionSpecific에 저장
+  → TX DMA 완료 시 CheckDoneNvmeDmaReq()에서 읽음
+  → set_auto_nvme_cpl()로 CQ entry DW0에 기록
+  → host의 ioctl cmd.result로 전달
 ```
 
-기존 write pipeline은 slice request를 만들고, data buffer를 할당한 뒤 RX DMA를 통해 host PRP buffer의 value를 device memory로 가져온다. 이후 GreedyFTL의 data buffer와 NAND write 경로가 기존 block write와 동일하게 동작한다.
+즉 value 본문은 TX DMA로 host buffer에 전달되고, value 길이는 completion DW0라는 별도 경로로 전달된다. host benchmark는 이 길이만큼 buffer에서 value를 잘라내어 기대 패턴과 비교한다.
 
-## 7. KV-GET 처리 흐름
+## 4. 10,000,000번 PUT (Keyspace 4,194,304) 테스트 결과 및 분석
 
-KV-GET은 `nvme_io_cmd.c`의 `handle_nvme_kv_get()`에서 처리한다.
+### 4.1 실행 조건 및 결과
+
+보드에서 펌웨어를 실행하고 host에서 `kv_bench`를 다음 조건으로 수행하였다.
 
 ```text
-1. CDW10에서 key 추출
-2. FindKvIndexEntry()로 latest LSA와 value length 검색
-3. key가 없으면 No-such-key completion 반환
-4. key가 있으면 ReqTransKvGetToSlice()로 read request 생성
-5. TX DMA 완료 후 completion DW0에 value length 반환
+sudo ./kv_bench /dev/nvme0n1 10000000 4194304 1
 ```
 
-GET path는 기존 read pipeline을 재사용한다. 다만 일반 block read와 달리 completion에 value length를 실어야 하므로 DMA completion 방식이 다르다.
-
-## 8. DMA 및 Completion 처리
-
-기존 GreedyFTL의 block read/write는 DMA request를 만들 때 hardware auto-completion을 켠다.
+결과 (캡처: `10Mtest.png`, `10Mtest_detail.png`):
 
 ```text
-set_auto_tx_dma(..., autoCompletion = 1)
-set_auto_rx_dma(..., autoCompletion = 1)
+ops=10000000  keyspace=4194304
+unique_keys=3807651
+result: OK=3807651  FAIL=0  NO-SUCH-KEY=1
+elapsed: 7.70468e+06 ms  (2595.82 IOPS est. for PUT+GET)
 ```
 
-`autoCompletion` bit는 `HOST_DMA_CMD_FIFO_REG`의 `dword[3]` bit 13에 위치한다. 이 bit가 1이면 FPGA NVMe host controller hardware가 DMA 완료 후 completion queue entry를 자동 생성한다.
+### 4.2 분석
 
-KV-GET에서는 host에게 실제 value length를 반환해야 한다. Hardware auto-completion만 사용하면 completion `DW0`에 원하는 값을 넣을 수 없으므로, KV-GET request는 auto-completion을 끈다.
-
-```text
-ReqTransKvGetToSlice()
-  -> autoCompletion = 0
-  -> completionSpecific = valueLength
-```
-
-`completionSpecific`은 DMA command FIFO로 전달되지 않는다. 대신 firmware의 request metadata에 저장된다.
-
-```text
-KV index valueLength
-  -> reqPool.nvmeDmaInfo.completionSpecific
-  -> DMA 완료 시 CheckDoneNvmeDmaReq()에서 읽음
-  -> set_auto_nvme_cpl(cmdSlotTag, valueLength, 0)
-  -> NVMe CQ DW0
-  -> host cmd.result
-```
-
-즉 value 본문은 TX DMA를 통해 host buffer로 이동하고, value 길이는 completion queue의 `DW0`를 통해 별도로 전달된다.
-
-## 9. No-Such-Key 처리
-
-GET 요청의 key가 index에 존재하지 않으면 NAND read나 DMA를 수행하지 않는다. Firmware는 vendor-specific NVMe status를 completion으로 반환한다.
-
-```text
-SCT = 0x7
-SC  = 0xC1
-Linux ioctl return status = 0x7C1
-```
-
-Host benchmark는 이 값을 `ENOSUCHKEY`로 해석하여 `NO-SUCH-KEY` count를 증가시킨다. 이 동작은 absent key에 대한 정상 동작으로 간주된다.
-
-## 10. 평가 결과
-
-보드에서 firmware를 실행하고 제공된 host benchmark를 통해 기능 검증을 완료하였다. 사용자가 확인한 결과 모든 테스트를 통과하였다.
-
-기본 benchmark 조건:
-
-```text
-operations = 10,000
-keyspace   = 4,096
-expected   = FAIL=0, NO-SUCH-KEY=1
-```
-
-최대 평가 조건:
-
-```text
-operations = 1,000,000
-keyspace   = 4,194,304
-expected   = FAIL=0, NO-SUCH-KEY=1
-```
-
-결과 캡처 삽입 위치:
-
-```text
-[Figure] 기본 benchmark 결과 캡처
-[Figure] 최대 조건 benchmark 결과 캡처
-```
-
-분석:
-
-- Random PUT workload가 device abort나 firmware crash 없이 완료되었다.
-- 동일 key에 대한 overwrite 이후 GET이 최신 value를 반환하였다.
-- 존재하지 않는 key에 대해 `No such key` semantics가 정상적으로 확인되었다.
-- 최종 summary에서 `FAIL=0`을 확인하여 data mismatch가 발생하지 않았음을 검증하였다.
-
-## 11. 한계 및 개선 방향
-
-### 11.1 Value 크기 제한
-
-현재 구현은 benchmark에 맞추어 4 KiB 이하 value를 대상으로 한다. 일반적인 KV-SSD라면 value 크기가 고정되지 않으므로, `key -> start LSA, value length`뿐 아니라 multi-slice extent 관리가 필요하다. 예를 들어 4 MiB value는 16 KiB slice 기준 256개의 연속 slice가 필요하다.
-
-개선 방향:
-
-- `AllocateKvLogicalSlices(sliceCount)` 구현
-- `key -> start LSA, value length, slice count` 관리
-- 큰 value에 대한 DMA split 및 multi-request completion 처리
-
-### 11.2 Persistence
-
-현재 KV index는 DRAM에만 존재한다. Firmware reset 이후 key-value mapping을 복구할 수 없다.
-
-개선 방향:
-
-- NAND-backed index checkpoint 추가
-- append log record에 key와 value metadata 저장
-- boot 시 log scan을 통한 index reconstruction
-
-### 11.3 Space Reclamation
-
-PUT마다 새 LSA를 소비하는 append-only 구조이므로 오래된 value가 차지한 logical space를 즉시 재사용하지 않는다.
-
-개선 방향:
-
-- invalidated KV entry 추적
-- log segment 단위 compaction
-- GreedyFTL GC와 KV metadata의 연동
-
-### 11.4 PUT Index Update 시점
-
-현재 PUT path는 write request를 pipeline에 넣기 전에 index를 갱신한다. Host benchmark는 synchronous ioctl 흐름으로 동작하므로 통과하지만, 더 엄밀한 설계에서는 RX DMA 완료 후 index를 갱신하는 것이 안전하다.
-
-개선 방향:
-
-- PUT request metadata에 key와 target LSA 저장
-- RX DMA 완료 시점에 index commit
-- 실패 시 index rollback 처리
-
-## 12. 결론
-
-본 프로젝트에서는 Cosmos+ OpenSSD GreedyFTL 펌웨어에 KV-PUT, KV-GET command path를 추가하고, in-memory hash index와 append-only value log를 통해 최소 기능의 KV-SSD를 구현하였다. 기존 FTL의 logical address translation과 DMA/NAND pipeline을 재사용함으로써 구현 범위를 줄이면서도 key 기반 storage abstraction을 제공할 수 있었다.
-
-특히 KV-GET에서는 value 본문 전송과 value length 반환이 서로 다른 경로를 사용한다는 점이 핵심이다. Value는 TX DMA를 통해 host buffer로 전달하고, value length는 수동 NVMe completion을 통해 completion `DW0`에 기록하였다. 이를 통해 host benchmark가 최신 value를 정확히 비교할 수 있었다.
-
-최종적으로 제공된 benchmark에서 crash, hang, data mismatch 없이 모든 테스트를 통과하였다.
-
+- **정확성**: 10,000,000회 random PUT 후 기록된 모든 unique key(3,807,651개)에 대한 GET이 전부 최신 패턴과 일치하여 `FAIL=0`을 달성했다. 평균적으로 key 하나당 약 2.6회의 overwrite가 발생하는 workload이므로, latest-write-wins semantics와 LBA 재활용 경로가 모두 올바르게 동작함을 보여준다. 존재하지 않는 key에 대한 GET도 정확히 1회 `NO-SUCH-KEY`로 처리되었다.
+- **unique key 수의 타당성**: keyspace N=4,194,304에서 ops=10,000,000회 균등 random 추출 시 기대되는 unique key 수는 N·(1−e^(−ops/N)) ≈ 4,194,304 × (1−e^(−2.384)) ≈ 3,807,000개로, 측정값 3,807,651과 거의 일치한다. 이는 benchmark가 의도대로 수행되었고 index에 유실이 없음을 간접 검증한다.
+- **공간 효율**: 4 KiB block 단위 할당과 overwrite 시 LBA 재활용 덕분에, 10M회 PUT에도 실제 소비된 logical space는 unique key 분량(약 3.8M × 4 KiB ≈ 14.5 GiB)에 그쳤다. 초기 구현(16 KiB slice 할당 + 무조건 append)이었다면 약 152.6 GiB가 필요하여 용량 초과로 실패했을 조건이다.
+- **Index 부하**: unique key 3.8M개에 대해 table 크기 8.39M이므로 최종 load factor는 약 45%로, linear probing의 평균 probe 길이가 짧게 유지되는 설계 범위 안에서 동작하였다.
+- **성능**: 전체 수행 시간은 약 7,705초(약 2시간 8분), PUT+GET 합산 약 2,596 IOPS로 측정되었다. 본 경로는 synchronous ioctl(QD=1) 기반이므로 device 한계가 아닌 단일 outstanding command 구조가 주된 병목이다.
+- **Host 측 조정**: 평가에 사용한 host 머신의 메모리가 작아 기존 `kv_bench`를 그대로 실행하면 OOM이 발생하였다. 이에 benchmark의 host 측 검증용 자료구조의 데이터 크기를 줄여 실행하였으며, device로 전달되는 command 형식과 4 KiB value 크기 등 평가 조건 자체는 변경하지 않았다.
