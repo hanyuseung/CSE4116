@@ -1,0 +1,77 @@
+diff --git a/drivers/nvme/host/core.c b/drivers/nvme/host/core.c
+index f3071bd11..52bf3faf1 100644
+--- a/drivers/nvme/host/core.c
++++ b/drivers/nvme/host/core.c
+@@ -19,7 +19,10 @@
+ #include <linux/ptrace.h>
+ #include <linux/nvme_ioctl.h>
+ #include <linux/pm_qos.h>
++#include <linux/string.h>
+ #include <asm/unaligned.h>
++// embe prj 4
++#include <linux/string.h>
+ 
+ #include "nvme.h"
+ #include "fabrics.h"
+@@ -2603,6 +2606,11 @@ static bool quirk_matches(const struct nvme_id_ctrl *id,
+ 		string_matches(id->fr, q->fr, sizeof(id->fr));
+ }
+ 
++static bool nvme_is_cosmos_openssd(const struct nvme_id_ctrl *id)
++{
++	return !strncasecmp(id->mn, "COSMOS+", 7);
++}
++
+ static void nvme_init_subnqn(struct nvme_subsystem *subsys, struct nvme_ctrl *ctrl,
+ 		struct nvme_id_ctrl *id)
+ {
+@@ -2911,7 +2919,9 @@ static int nvme_init_non_mdts_limits(struct nvme_ctrl *ctrl)
+ 	struct nvme_id_ctrl_nvm *id;
+ 	int ret;
+ 
+-	if (ctrl->oncs & NVME_CTRL_ONCS_DSM) {
++	// embe-prj4
++	if ((ctrl->oncs & NVME_CTRL_ONCS_DSM) &&
++	    !(ctrl->quirks & NVME_QUIRK_NO_DISCARD)) {
+ 		ctrl->max_discard_sectors = UINT_MAX;
+ 		ctrl->max_discard_segments = NVME_DSM_MAX_RANGES;
+ 	} else {
+@@ -2931,7 +2941,9 @@ static int nvme_init_non_mdts_limits(struct nvme_ctrl *ctrl)
+ 	else
+ 		ctrl->max_zeroes_sectors = 0;
+ 
+-	if (nvme_ctrl_limited_cns(ctrl))
++	// embe-prj4
++	if (nvme_ctrl_limited_cns(ctrl) ||
++	    (ctrl->quirks & NVME_QUIRK_NO_DISCARD))
+ 		return 0;
+ 
+ 	id = kzalloc(sizeof(*id), GFP_KERNEL);
+@@ -2991,6 +3003,10 @@ static int nvme_init_identify(struct nvme_ctrl *ctrl)
+ 		 * the device, but we'd have to make sure that the driver
+ 		 * behaves intelligently if the quirks change.
+ 		 */
++		// embe-prj4
++		if (nvme_is_cosmos_openssd(id))
++			ctrl->quirks |= NVME_QUIRK_NO_DISCARD;
++
+ 		for (i = 0; i < ARRAY_SIZE(core_quirks); i++) {
+ 			if (quirk_matches(id, &core_quirks[i]))
+ 				ctrl->quirks |= core_quirks[i].quirks;
+diff --git a/drivers/nvme/host/nvme.h b/drivers/nvme/host/nvme.h
+index c8ec0e146..e8a8cb09b 100644
+--- a/drivers/nvme/host/nvme.h
++++ b/drivers/nvme/host/nvme.h
+@@ -164,6 +164,12 @@ enum nvme_quirks {
+ 	 * Disables simple suspend/resume path.
+ 	 */
+ 	NVME_QUIRK_FORCE_NO_SIMPLE_SUSPEND	= (1 << 20),
++
++	/*
++	 * The controller advertises DSM discard, but does not handle it
++	 * correctly. - embe prj4
++	 */
++	NVME_QUIRK_NO_DISCARD		= (1 << 21),
+ };
+ 
+ /*
